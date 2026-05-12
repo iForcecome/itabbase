@@ -1,0 +1,147 @@
+package itab
+
+import (
+	"context"
+
+	"github.com/gogf/gf/v2/frame/g"
+)
+
+// Builtin collection names. Kernel auto-registers these on New(); business
+// code calling RegisterCollection with these names will panic (duplicate).
+const (
+	BuiltinUsers     = "users"
+	BuiltinRoles     = "roles"
+	BuiltinUserRoles = "user_roles"
+	BuiltinSettings  = "system_settings"
+)
+
+// User lifecycle status values stored in `users.status`.
+const (
+	UserStatusActive   = "active"
+	UserStatusPending  = "pending"
+	UserStatusRejected = "rejected"
+)
+
+func builtinUsersCollection() Collection {
+	return Collection{
+		Name:    BuiltinUsers,
+		Display: "用户",
+		Fields: []Field{
+			{Name: "username", Type: TString, MaxLen: 64},
+			{Name: "external_id", Type: TString, MaxLen: 128},
+			{Name: "display_name", Type: TString, MaxLen: 200},
+			{Name: "avatar", Type: TString, MaxLen: 500},
+			{Name: "password_hash", Type: TString, MaxLen: 200},
+			{Name: "status", Type: TString, MaxLen: 20, Default: UserStatusActive},
+			{Name: "disabled", Type: TBool, Default: false},
+			{Name: "first_seen_at", Type: TDateTime},
+			{Name: "last_seen_at", Type: TDateTime},
+			{Name: "user_roles", Type: THasMany, Target: BuiltinUserRoles, Through: "user_id"},
+		},
+		ACL: ACL{
+			"admin": {ActionAll},
+			"user":  {ActionList, ActionGet},
+		},
+	}
+}
+
+func builtinSettingsCollection() Collection {
+	return Collection{
+		Name:    BuiltinSettings,
+		Display: "系统设置",
+		Fields: []Field{
+			{Name: "key", Type: TString, Required: true, MaxLen: 64},
+			{Name: "value", Type: TString, MaxLen: 500},
+		},
+		ACL: ACL{
+			"admin": {ActionAll},
+		},
+	}
+}
+
+func builtinRolesCollection() Collection {
+	return Collection{
+		Name:    BuiltinRoles,
+		Display: "角色",
+		Fields: []Field{
+			{Name: "name", Type: TString, Required: true, MaxLen: 64},
+			{Name: "display", Type: TString, MaxLen: 200},
+		},
+		ACL: ACL{
+			"admin": {ActionAll},
+			"user":  {ActionList, ActionGet},
+		},
+	}
+}
+
+func builtinUserRolesCollection() Collection {
+	return Collection{
+		Name:    BuiltinUserRoles,
+		Display: "用户角色",
+		Fields: []Field{
+			{Name: "user_id", Type: TBelongsTo, Target: BuiltinUsers, Required: true},
+			{Name: "role_id", Type: TBelongsTo, Target: BuiltinRoles, Required: true},
+		},
+		ACL: ACL{
+			"admin": {ActionAll},
+			"user":  {ActionList, ActionGet},
+		},
+	}
+}
+
+// registerBuiltins appends kernel's core collections to the registry.
+// Hooks that need access to k.db are attached here as closures.
+func (k *Kernel) registerBuiltins() {
+	usersCol := builtinUsersCollection()
+	usersCol.Hooks.AfterUpdate = k.bindUserRoleOnActivate
+
+	cols := []Collection{
+		usersCol,
+		builtinRolesCollection(),
+		builtinUserRolesCollection(),
+		builtinSettingsCollection(),
+	}
+	for _, c := range cols {
+		if err := c.Validate(); err != nil {
+			panic("itab builtin: " + err.Error())
+		}
+		k.collections = append(k.collections, c)
+	}
+}
+
+// bindUserRoleOnActivate is the users.AfterUpdate hook: when a user's status
+// transitions to "active" (typically admin approval) and that user has no
+// user_roles row yet, insert one binding to the "user" role. Idempotent.
+func (k *Kernel) bindUserRoleOnActivate(ctx context.Context, rec *Record) error {
+	status, _ := rec.Get("status").(string)
+	if status != UserStatusActive {
+		return nil
+	}
+	var userID int64
+	switch v := rec.Get("id").(type) {
+	case int64:
+		userID = v
+	case int:
+		userID = int64(v)
+	case float64:
+		userID = int64(v)
+	default:
+		return nil
+	}
+	if userID == 0 {
+		return nil
+	}
+	n, err := k.db.Model(BuiltinUserRoles).Ctx(ctx).Where("user_id", userID).Count()
+	if err != nil || n > 0 {
+		return err
+	}
+	roleRow, err := k.db.Model(BuiltinRoles).Ctx(ctx).Where("name", "user").One()
+	if err != nil || roleRow.IsEmpty() {
+		return err
+	}
+	_, err = k.db.Model(BuiltinUserRoles).Ctx(ctx).Insert(g.Map{
+		"user_id": userID,
+		"role_id": roleRow["id"].Int64(),
+	})
+	return err
+}

@@ -1,0 +1,13 @@
+# Vue admin SPA build artifacts
+admin/node_modules/
+admin/.vite/
+admin/*.tsbuildinfo
+
+# server/web/ IS committed — go:embed needs it at build time.
+# Vite builds admin/ into ../server/web; CI rebuilds on each tagged release.
+
+# Go binaries
+server/cmd/itab-gen-client/itab-gen-client
+server/cmd/server/data.db
+server/cmd/server/server
+server/server
