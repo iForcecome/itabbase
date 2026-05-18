@@ -1,4 +1,4 @@
-package itab
+package schema
 
 import (
 	"context"
@@ -6,31 +6,48 @@ import (
 	"strings"
 
 	"github.com/gogf/gf/v2/database/gdb"
+
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/model"
 )
 
-func (k *Kernel) syncCollections(ctx context.Context) error {
-	dialect := k.dialect()
-	for _, c := range k.collections {
-		if err := k.syncOne(ctx, dialect, c); err != nil {
+// SyncAll creates/alters tables for all collections.
+func SyncAll(ctx context.Context, db gdb.DB, cols []model.Collection) error {
+	dialect := Dialect(db)
+	for _, c := range cols {
+		if err := syncOne(ctx, db, dialect, c); err != nil {
 			return fmt.Errorf("sync %s: %w", c.Name, err)
 		}
 	}
 	return nil
 }
 
-func (k *Kernel) syncOne(ctx context.Context, dialect string, c Collection) error {
-	exists, err := k.tableExists(ctx, dialect, c.Name)
+// SyncNonBuiltin syncs only non-builtin collections.
+func SyncNonBuiltin(ctx context.Context, db gdb.DB, cols []model.Collection) error {
+	dialect := Dialect(db)
+	for _, c := range cols {
+		if c.Source == model.SourceBuiltin {
+			continue
+		}
+		if err := syncOne(ctx, db, dialect, c); err != nil {
+			return fmt.Errorf("sync %s: %w", c.Name, err)
+		}
+	}
+	return nil
+}
+
+func syncOne(ctx context.Context, db gdb.DB, dialect string, c model.Collection) error {
+	exists, err := tableExists(ctx, db, dialect, c.Name)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		stmt := buildCreateTable(dialect, c)
-		if _, err := k.db.Exec(ctx, stmt); err != nil {
+		stmt := BuildCreateTable(dialect, c)
+		if _, err := db.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
 		return nil
 	}
-	cols, err := k.tableColumns(ctx, c.Name)
+	cols, err := tableColumns(ctx, db, c.Name)
 	if err != nil {
 		return err
 	}
@@ -41,23 +58,24 @@ func (k *Kernel) syncOne(ctx context.Context, dialect string, c Collection) erro
 		if _, ok := cols[f.Name]; ok {
 			continue
 		}
-		stmt := buildAddColumn(dialect, c.Name, f)
-		if _, err := k.db.Exec(ctx, stmt); err != nil {
+		stmt := BuildAddColumn(dialect, c.Name, f)
+		if _, err := db.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("add column %s.%s: %w", c.Name, f.Name, err)
 		}
 	}
 	return nil
 }
 
-func (k *Kernel) dialect() string {
-	cfg := k.db.GetConfig()
+// Dialect returns the DB driver type in lowercase.
+func Dialect(db gdb.DB) string {
+	cfg := db.GetConfig()
 	if cfg == nil {
 		return ""
 	}
 	return strings.ToLower(cfg.Type)
 }
 
-func (k *Kernel) tableExists(ctx context.Context, dialect, name string) (bool, error) {
+func tableExists(ctx context.Context, db gdb.DB, dialect, name string) (bool, error) {
 	var sql string
 	switch dialect {
 	case "sqlite":
@@ -67,15 +85,15 @@ func (k *Kernel) tableExists(ctx context.Context, dialect, name string) (bool, e
 	default:
 		return false, fmt.Errorf("itab: unsupported dialect %q", dialect)
 	}
-	v, err := k.db.GetValue(ctx, sql, name)
+	v, err := db.GetValue(ctx, sql, name)
 	if err != nil {
 		return false, err
 	}
 	return v.Int() > 0, nil
 }
 
-func (k *Kernel) tableColumns(ctx context.Context, name string) (map[string]gdb.TableField, error) {
-	fields, err := k.db.TableFields(ctx, name)
+func tableColumns(ctx context.Context, db gdb.DB, name string) (map[string]gdb.TableField, error) {
+	fields, err := db.TableFields(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -88,10 +106,11 @@ func (k *Kernel) tableColumns(ctx context.Context, name string) (map[string]gdb.
 	return out, nil
 }
 
-func buildCreateTable(dialect string, c Collection) string {
+// BuildCreateTable returns a CREATE TABLE statement for the given collection.
+func BuildCreateTable(dialect string, c model.Collection) string {
 	var b strings.Builder
 	b.WriteString("CREATE TABLE ")
-	b.WriteString(quoteIdent(dialect, c.Name))
+	b.WriteString(QuoteIdent(dialect, c.Name))
 	b.WriteString(" (\n")
 	b.WriteString("  ")
 	b.WriteString(idColumnDef(dialect))
@@ -109,9 +128,10 @@ func buildCreateTable(dialect string, c Collection) string {
 	return b.String()
 }
 
-func buildAddColumn(dialect, table string, f Field) string {
+// BuildAddColumn returns an ALTER TABLE ADD COLUMN statement.
+func BuildAddColumn(dialect, table string, f model.Field) string {
 	return fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s",
-		quoteIdent(dialect, table),
+		QuoteIdent(dialect, table),
 		columnDef(dialect, f),
 	)
 }
@@ -126,8 +146,8 @@ func idColumnDef(dialect string) string {
 	return `"id" INTEGER PRIMARY KEY`
 }
 
-func columnDef(dialect string, f Field) string {
-	parts := []string{quoteIdent(dialect, f.Name), sqlType(dialect, f)}
+func columnDef(dialect string, f model.Field) string {
+	parts := []string{QuoteIdent(dialect, f.Name), sqlType(dialect, f)}
 	if f.Required {
 		parts = append(parts, "NOT NULL")
 	}
@@ -137,43 +157,43 @@ func columnDef(dialect string, f Field) string {
 	return strings.Join(parts, " ")
 }
 
-func sqlType(dialect string, f Field) string {
+func sqlType(dialect string, f model.Field) string {
 	switch dialect {
 	case "sqlite":
 		switch f.Type {
-		case TString, TText:
+		case model.TString, model.TText:
 			return "TEXT"
-		case TInt, TBool, TBelongsTo:
+		case model.TInt, model.TBool, model.TBelongsTo:
 			return "INTEGER"
-		case TFloat:
+		case model.TFloat:
 			return "REAL"
-		case TDateTime:
+		case model.TDateTime:
 			return "DATETIME"
 		}
 	case "mysql":
 		switch f.Type {
-		case TString:
+		case model.TString:
 			n := f.MaxLen
 			if n <= 0 {
 				n = 255
 			}
 			return fmt.Sprintf("VARCHAR(%d)", n)
-		case TText:
+		case model.TText:
 			return "TEXT"
-		case TInt, TBelongsTo:
+		case model.TInt, model.TBelongsTo:
 			return "BIGINT"
-		case TBool:
+		case model.TBool:
 			return "TINYINT(1)"
-		case TFloat:
+		case model.TFloat:
 			return "DOUBLE"
-		case TDateTime:
+		case model.TDateTime:
 			return "DATETIME"
 		}
 	}
 	return "TEXT"
 }
 
-func formatDefault(f Field) string {
+func formatDefault(f model.Field) string {
 	switch v := f.Default.(type) {
 	case bool:
 		if v {
@@ -188,7 +208,8 @@ func formatDefault(f Field) string {
 	return "NULL"
 }
 
-func quoteIdent(dialect, name string) string {
+// QuoteIdent quotes an identifier for the given dialect.
+func QuoteIdent(dialect, name string) string {
 	if dialect == "mysql" {
 		return "`" + name + "`"
 	}

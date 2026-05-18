@@ -1,30 +1,36 @@
-// Package itab is the v0 minimal kernel: collection registry + auto CRUD + schema sync.
-//
-// Usage:
-//
-//	k := itab.New(itab.WithDB(g.DB()))
-//	k.RegisterCollection(itab.Collection{Name: "todos", Fields: []itab.Field{...}})
-//	if err := k.Mount(group); err != nil { ... }
 package itab
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/net/ghttp"
+
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/auth"
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/bootstrap"
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/handler"
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/model"
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/schema"
 )
 
 type Kernel struct {
 	db            gdb.DB
-	collections   []Collection
+	collections   []model.Collection
+	mu            sync.RWMutex
 	apiPrefix     string
-	auth          AuthAdapter
+	auth          model.AuthAdapter
 	aclDisabled   bool
 	builtinAuth   bool
-	customRoutes  []Route
+	customRoutes  []model.Route
 	reservedPaths []string
+
+	ssoEnabled  bool
+	ssoProvider model.OAuthProvider
+	ssoConfig   model.SSOConfig
+	ssoHandler  *auth.SSOHandler
 }
 
 type Option func(*Kernel)
@@ -37,10 +43,7 @@ func WithAPIPrefix(p string) Option {
 	return func(k *Kernel) { k.apiPrefix = p }
 }
 
-// WithReservedPaths adds collection names that must NOT be registered, on top
-// of kernel's defaults ("auth", "admin", "meta"). Use this to declare scaffold
-// routes that share the apiPrefix namespace and would collide with a
-// same-named collection (e.g. "health", "notifications").
+// WithReservedPaths adds collection names that must NOT be registered.
 func WithReservedPaths(names ...string) Option {
 	return func(k *Kernel) {
 		k.reservedPaths = append(k.reservedPaths, names...)
@@ -48,7 +51,6 @@ func WithReservedPaths(names ...string) Option {
 }
 
 // WithAuth installs the auth adapter that resolves the current user and roles.
-// Either WithAuth or WithoutAuth must be set before Mount.
 func WithAuth(a AuthAdapter) Option {
 	return func(k *Kernel) {
 		k.auth = a
@@ -56,12 +58,34 @@ func WithAuth(a AuthAdapter) Option {
 	}
 }
 
-// WithoutAuth disables the ACL layer entirely. All requests pass through.
-// Intended for dev/test scaffolding where SSO isn't wired up yet; not for prod.
+// WithoutAuth disables the ACL layer entirely.
 func WithoutAuth() Option {
 	return func(k *Kernel) {
 		k.auth = nil
 		k.aclDisabled = true
+	}
+}
+
+// WithBuiltinAuth installs a session-based local password auth adapter.
+func WithBuiltinAuth() Option {
+	return func(k *Kernel) {
+		adapter := &auth.BuiltinAdapter{DB: k.db}
+		k.auth = adapter
+		k.aclDisabled = false
+		k.builtinAuth = true
+	}
+}
+
+// WithSSOAuth installs an SSO-based auth adapter using the given provider.
+func WithSSOAuth(provider OAuthProvider, cfg SSOConfig) Option {
+	return func(k *Kernel) {
+		adapter := &auth.BuiltinAdapter{DB: k.db}
+		k.auth = adapter
+		k.aclDisabled = false
+		k.builtinAuth = true
+		k.ssoEnabled = true
+		k.ssoProvider = provider
+		k.ssoConfig = cfg
 	}
 }
 
@@ -77,7 +101,6 @@ func New(opts ...Option) *Kernel {
 	return k
 }
 
-// collectionByName returns the registered collection with the given name.
 func (k *Kernel) collectionByName(name string) (Collection, bool) {
 	for _, c := range k.collections {
 		if c.Name == name {
@@ -99,10 +122,14 @@ func (k *Kernel) RegisterCollection(c Collection) {
 	k.collections = append(k.collections, c)
 }
 
-// Mount syncs schema for all registered collections and registers CRUD routes
-// onto the given router group, prefixed by apiPrefix (default "/api").
-// Meta endpoints (whoami, collections) are mounted under <apiPrefix>/meta/*.
-// The admin SPA static path "/admin/*" is mounted at the group root.
+func (k *Kernel) RegisterCustomRoute(r Route) {
+	if r.Method == "" || r.Path == "" || r.Handler == nil {
+		panic("itab: Route requires Method, Path and Handler")
+	}
+	k.customRoutes = append(k.customRoutes, r)
+}
+
+// Mount syncs schema for all registered collections and registers CRUD routes.
 func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 	if k.db == nil {
 		return errors.New("itab: WithDB is required")
@@ -119,86 +146,148 @@ func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 
 	ctx := context.Background()
 
-	// Phase 1: sync builtin tables (including _collections / _fields).
-	if err := k.syncCollections(ctx); err != nil {
+	// Phase 1: sync builtin tables.
+	if err := schema.SyncAll(ctx, k.db, k.collections); err != nil {
 		return fmt.Errorf("itab: schema sync (builtins): %w", err)
 	}
 
-	// Phase 2: load dynamic collections from _collections + _fields DB tables.
-	if err := k.loadDynamicCollections(ctx); err != nil {
+	// Phase 2: load dynamic collections from DB.
+	dynCols, err := schema.LoadDynamic(ctx, k.db, k.collections)
+	if err != nil {
 		return fmt.Errorf("itab: load dynamic collections: %w", err)
 	}
+	k.collections = append(k.collections, dynCols...)
 
-	// Phase 3: sync dynamic collection tables (CREATE TABLE / ADD COLUMN).
-	if err := k.syncCollections(ctx); err != nil {
+	// Phase 3: sync dynamic collection tables.
+	if err := schema.SyncNonBuiltin(ctx, k.db, k.collections); err != nil {
 		return fmt.Errorf("itab: schema sync (dynamic): %w", err)
 	}
 
-	// Phase 4: bootstrap seed data (roles, admin user, default settings).
-	if err := k.ensureBootstrap(ctx); err != nil {
+	// Phase 4: bootstrap seed data.
+	if err := bootstrap.Seed(ctx, k.db); err != nil {
 		return fmt.Errorf("itab: bootstrap: %w", err)
+	}
+
+	// Build handler env with shared state.
+	env := &handler.Env{
+		DB:            k.db,
+		Auth:          k.auth,
+		ACLDisabled:   k.aclDisabled,
+		Mu:            &k.mu,
+		Collections:   &k.collections,
+		ReservedPaths: k.reservedPaths,
 	}
 
 	var registerErr error
 	group.Group(k.apiPrefix, func(sub *ghttp.RouterGroup) {
-		// 1. Custom routes first (most specific paths).
+		// 1. Custom routes first.
 		for _, route := range k.customRoutes {
-			wrapped := k.routeACLWrap(route.ACL, route.Handler)
-			if err := mountCustomRoute(sub, route, wrapped); err != nil {
+			wrapped := env.RouteACLWrap(route.ACL, route.Handler)
+			if err := handler.MountCustomRoute(sub, route, wrapped); err != nil {
 				registerErr = err
 				return
 			}
 		}
 
-		// 2. Auth endpoints (only when using built-in auth).
+		// 2. Auth endpoints.
 		if k.builtinAuth {
-			sub.POST("/auth/local/login", k.handleLocalLogin)
-			sub.POST("/auth/logout", k.handleLogout)
+			sub.POST("/auth/local/login", auth.HandleLocalLogin(k.db))
+			sub.POST("/auth/logout", auth.HandleLogout())
+		}
+		if k.ssoEnabled {
+			k.ssoHandler = &auth.SSOHandler{
+				DB:       k.db,
+				Provider: k.ssoProvider,
+				Config:   k.ssoConfig,
+			}
+			sub.GET("/auth/login", k.ssoHandler.HandleSSOLogin)
+			sub.GET("/auth/callback", k.ssoHandler.HandleSSOCallback)
 		}
 
-		// 3. Meta endpoints (explicit paths, highest priority).
-		sub.GET("/meta/whoami", k.routeACLWrap(RequireAuthed(), k.handleWhoami))
-		sub.GET("/meta/collections", k.routeACLWrap(RequireAuthed(), k.handleMetaCollections))
+		// 3. Meta endpoints.
+		sub.GET("/meta/whoami", env.RouteACLWrap(RequireAuthed(), env.HandleWhoami))
+		sub.GET("/meta/collections", env.RouteACLWrap(RequireAuthed(), env.HandleMetaCollections))
 
 		// 4. Dynamic collection management API (admin-only).
-		sub.POST("/meta/collections", k.routeACLWrap(RequireRole("admin"), k.handleCreateCollection))
-		sub.PATCH("/meta/collections/:name", k.routeACLWrap(RequireRole("admin"), k.handleUpdateCollection))
-		sub.DELETE("/meta/collections/:name", k.routeACLWrap(RequireRole("admin"), k.handleDeleteCollection))
-		sub.POST("/meta/collections/:name/fields", k.routeACLWrap(RequireRole("admin"), k.handleAddField))
-		sub.PATCH("/meta/collections/:name/fields/:fieldName", k.routeACLWrap(RequireRole("admin"), k.handleUpdateField))
-		sub.DELETE("/meta/collections/:name/fields/:fieldName", k.routeACLWrap(RequireRole("admin"), k.handleDeleteField))
+		sub.POST("/meta/collections", env.RouteACLWrap(RequireRole("admin"), env.HandleCreateCollection))
+		sub.PATCH("/meta/collections/:name", env.RouteACLWrap(RequireRole("admin"), env.HandleUpdateCollection))
+		sub.DELETE("/meta/collections/:name", env.RouteACLWrap(RequireRole("admin"), env.HandleDeleteCollection))
+		sub.POST("/meta/collections/:name/fields", env.RouteACLWrap(RequireRole("admin"), env.HandleAddField))
+		sub.PATCH("/meta/collections/:name/fields/:fieldName", env.RouteACLWrap(RequireRole("admin"), env.HandleUpdateField))
+		sub.DELETE("/meta/collections/:name/fields/:fieldName", env.RouteACLWrap(RequireRole("admin"), env.HandleDeleteField))
 
-		// 5. Universal dynamic CRUD — resolves collection by name at request time.
-		// This handles ALL collections (builtin + code + dynamic), including ones
-		// created at runtime after Mount(). GoFrame routes exact paths (meta/*)
-		// before parameter paths (/:_col), so there are no conflicts.
-		sub.GET("/:_col", k.dynamicCRUD(ActionList))
-		sub.GET("/:_col/:id", k.dynamicCRUD(ActionGet))
-		sub.POST("/:_col", k.dynamicCRUD(ActionCreate))
-		sub.PATCH("/:_col/:id", k.dynamicCRUD(ActionUpdate))
-		sub.DELETE("/:_col/:id", k.dynamicCRUD(ActionDelete))
+		// 5. Universal dynamic CRUD.
+		sub.GET("/:_col", env.DynamicCRUD(ActionList))
+		sub.GET("/:_col/:id", env.DynamicCRUD(ActionGet))
+		sub.POST("/:_col", env.DynamicCRUD(ActionCreate))
+		sub.PATCH("/:_col/:id", env.DynamicCRUD(ActionUpdate))
+		sub.DELETE("/:_col/:id", env.DynamicCRUD(ActionDelete))
 	})
 	if registerErr != nil {
 		return registerErr
 	}
-	// Admin SPA static files at <group>/admin/*. The SPA handles its own
-	// login UX so these routes are public.
-	//
-	// gf v2's `/admin/*any` wildcard also matches `/admin` (no trailing slash),
-	// so the trailing-slash redirect lives inside serveAdminSPA itself — a
-	// separate `group.GET("/admin", ...)` is shadowed by the wildcard.
+
 	group.GET("/admin", k.serveAdminSPA)
 	group.GET("/admin/*any", k.serveAdminSPA)
 	return nil
 }
 
-// checkReservedPaths fails Mount if any registered collection name collides
-// with a reserved path under apiPrefix.
+func (k *Kernel) registerBuiltins() {
+	builtins := schema.BuiltinCollections()
+	for i := range builtins {
+		if builtins[i].Name == model.BuiltinUsers {
+			builtins[i].Hooks.AfterUpdate = k.bindUserRoleOnActivate
+		}
+		if builtins[i].Source == "" {
+			builtins[i].Source = model.SourceBuiltin
+			builtins[i].Internal = true
+		}
+		if err := builtins[i].Validate(); err != nil {
+			panic("itab builtin: " + err.Error())
+		}
+		k.collections = append(k.collections, builtins[i])
+	}
+}
+
+func (k *Kernel) bindUserRoleOnActivate(ctx context.Context, rec *Record) error {
+	status, _ := rec.Get("status").(string)
+	if status != UserStatusActive {
+		return nil
+	}
+	var userID int64
+	switch v := rec.Get("id").(type) {
+	case int64:
+		userID = v
+	case int:
+		userID = int64(v)
+	case float64:
+		userID = int64(v)
+	default:
+		return nil
+	}
+	if userID == 0 {
+		return nil
+	}
+	n, err := k.db.Model(BuiltinUserRoles).Ctx(ctx).Where("user_id", userID).Count()
+	if err != nil || n > 0 {
+		return err
+	}
+	roleRow, err := k.db.Model(BuiltinRoles).Ctx(ctx).Where("name", "user").One()
+	if err != nil || roleRow.IsEmpty() {
+		return err
+	}
+	_, err = k.db.Model(BuiltinUserRoles).Ctx(ctx).Insert(map[string]any{
+		"user_id": userID,
+		"role_id": roleRow["id"].Int64(),
+	})
+	return err
+}
+
 func (k *Kernel) checkReservedPaths() error {
 	for _, c := range k.collections {
 		for _, rp := range k.reservedPaths {
 			if c.Name == rp {
-				return fmt.Errorf("itab: collection %q collides with reserved path %q under apiPrefix %q (use WithReservedPaths to inspect, or rename the collection)", c.Name, rp, k.apiPrefix)
+				return fmt.Errorf("itab: collection %q collides with reserved path %q under apiPrefix %q", c.Name, rp, k.apiPrefix)
 			}
 		}
 	}

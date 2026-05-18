@@ -1,4 +1,4 @@
-module github.com/iForcecome/itabbase/server
+module ksogit.kingsoft.net/wpsee/itabbase/server
 
 go 1.25.0
 

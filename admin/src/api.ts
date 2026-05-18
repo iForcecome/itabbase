@@ -52,8 +52,19 @@ export interface MetaCollection {
 
 export interface User {
   id: string
-  name: string
+  display_name: string
   roles?: string[]
+  external_id?: string
+  user_name?: string
+  avatar?: string
+  email?: string
+  phone?: string
+  gender?: string
+  employee_id?: string
+  title?: string
+  department?: string
+  department_path?: string
+  company_id?: string
 }
 
 export interface ListResult<T = Record<string, unknown>> {

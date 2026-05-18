@@ -1,4 +1,4 @@
-package itab
+package handler
 
 import (
 	"context"
@@ -6,9 +6,10 @@ import (
 	"strings"
 
 	"github.com/gogf/gf/v2/net/ghttp"
+
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/model"
 )
 
-// parseIncludes pulls and trims comma-separated `?include=foo,bar` values.
 func parseIncludes(r *ghttp.Request) []string {
 	raw := r.GetQuery("include").String()
 	if raw == "" {
@@ -25,42 +26,32 @@ func parseIncludes(r *ghttp.Request) []string {
 	return out
 }
 
-// resolveIncludes mutates rows in place, embedding related data for each
-// include name that maps to a relation field on the collection.
-//
-// Naming:
-//   - belongs_to with field name "<x>_id" → embed under "<x>"
-//   - belongs_to with other field name → embed under "<name>_obj"
-//   - has_many → embed under field name itself
-//
-// ACL: target collection's ACL is re-checked using the current user's roles
-// (from ctx). Insufficient access → embed null / empty array, no error.
-func (k *Kernel) resolveIncludes(ctx context.Context, c Collection, rows []map[string]any, includes []string) error {
+func (e *Env) resolveIncludes(ctx context.Context, c model.Collection, rows []map[string]any, includes []string) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	roles, authed, _ := rolesFromCtx(ctx)
+	roles, authed, _ := model.RolesFromCtx(ctx)
 	for _, inc := range includes {
 		f, ok := findIncludeField(c, inc)
 		if !ok {
 			continue
 		}
-		target, hasTarget := k.collectionByName(f.Target)
+		target, hasTarget := e.FindCollection(f.Target)
 		switch f.Type {
-		case TBelongsTo:
-			if hasTarget && !decideAccess(target, ActionGet, roles, authed) {
+		case model.TBelongsTo:
+			if hasTarget && !model.DecideAccess(target, model.ActionGet, roles, authed) {
 				placeBelongsToEmpty(f, rows)
 				continue
 			}
-			if err := k.includeBelongsTo(ctx, f, rows); err != nil {
+			if err := e.includeBelongsTo(ctx, f, rows); err != nil {
 				return err
 			}
-		case THasMany:
-			if hasTarget && !decideAccess(target, ActionList, roles, authed) {
+		case model.THasMany:
+			if hasTarget && !model.DecideAccess(target, model.ActionList, roles, authed) {
 				placeHasManyEmpty(f, rows)
 				continue
 			}
-			if err := k.includeHasMany(ctx, f, rows); err != nil {
+			if err := e.includeHasMany(ctx, f, rows); err != nil {
 				return err
 			}
 		}
@@ -68,37 +59,37 @@ func (k *Kernel) resolveIncludes(ctx context.Context, c Collection, rows []map[s
 	return nil
 }
 
-func placeBelongsToEmpty(f Field, rows []map[string]any) {
+func placeBelongsToEmpty(f model.Field, rows []map[string]any) {
 	key := belongsToEmbedKey(f)
 	for _, row := range rows {
 		row[key] = nil
 	}
 }
 
-func placeHasManyEmpty(f Field, rows []map[string]any) {
+func placeHasManyEmpty(f model.Field, rows []map[string]any) {
 	for _, row := range rows {
 		row[f.Name] = []map[string]any{}
 	}
 }
 
-func findIncludeField(c Collection, inc string) (Field, bool) {
+func findIncludeField(c model.Collection, inc string) (model.Field, bool) {
 	for _, f := range c.Fields {
 		switch f.Type {
-		case TBelongsTo:
+		case model.TBelongsTo:
 			stripped := strings.TrimSuffix(f.Name, "_id")
 			if inc == stripped || inc == f.Name {
 				return f, true
 			}
-		case THasMany:
+		case model.THasMany:
 			if inc == f.Name {
 				return f, true
 			}
 		}
 	}
-	return Field{}, false
+	return model.Field{}, false
 }
 
-func belongsToEmbedKey(f Field) string {
+func belongsToEmbedKey(f model.Field) string {
 	stripped := strings.TrimSuffix(f.Name, "_id")
 	if stripped != f.Name {
 		return stripped
@@ -106,12 +97,12 @@ func belongsToEmbedKey(f Field) string {
 	return f.Name + "_obj"
 }
 
-func (k *Kernel) includeBelongsTo(ctx context.Context, f Field, rows []map[string]any) error {
+func (e *Env) includeBelongsTo(ctx context.Context, f model.Field, rows []map[string]any) error {
 	ids := uniqueAnyValues(rows, f.Name)
 	if len(ids) == 0 {
 		return nil
 	}
-	targets, err := k.db.Model(f.Target).Ctx(ctx).WhereIn("id", ids).All()
+	targets, err := e.DB.Model(f.Target).Ctx(ctx).WhereIn("id", ids).All()
 	if err != nil {
 		return fmt.Errorf("load belongs_to %s: %w", f.Name, err)
 	}
@@ -130,12 +121,12 @@ func (k *Kernel) includeBelongsTo(ctx context.Context, f Field, rows []map[strin
 	return nil
 }
 
-func (k *Kernel) includeHasMany(ctx context.Context, f Field, rows []map[string]any) error {
+func (e *Env) includeHasMany(ctx context.Context, f model.Field, rows []map[string]any) error {
 	parentIDs := uniqueAnyValues(rows, "id")
 	if len(parentIDs) == 0 {
 		return nil
 	}
-	related, err := k.db.Model(f.Target).Ctx(ctx).WhereIn(f.Through, parentIDs).All()
+	related, err := e.DB.Model(f.Target).Ctx(ctx).WhereIn(f.Through, parentIDs).All()
 	if err != nil {
 		return fmt.Errorf("load has_many %s: %w", f.Name, err)
 	}

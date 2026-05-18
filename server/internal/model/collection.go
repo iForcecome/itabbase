@@ -1,4 +1,4 @@
-package itab
+package model
 
 import (
 	"errors"
@@ -40,24 +40,22 @@ type Field struct {
 	Through  string // for THasMany: FK column on target
 }
 
-// IsVirtual reports whether the field has no DB column (skipped in migration / pickFields).
 func (f Field) IsVirtual() bool {
 	return f.Type == THasMany
 }
 
-// IsRelation reports whether the field is a belongs_to or has_many relation.
 func (f Field) IsRelation() bool {
 	return f.Type == TBelongsTo || f.Type == THasMany
 }
 
-var identRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+var IdentRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 func (c Collection) Validate() error {
 	if c.Name == "" {
 		return errors.New("collection.Name is required")
 	}
-	if !identRe.MatchString(c.Name) {
-		return fmt.Errorf("collection.Name %q must match %s", c.Name, identRe.String())
+	if !IdentRe.MatchString(c.Name) {
+		return fmt.Errorf("collection.Name %q must match %s", c.Name, IdentRe.String())
 	}
 	if c.Name == "id" {
 		return fmt.Errorf("collection.Name cannot be %q (reserved)", c.Name)
@@ -70,14 +68,14 @@ func (c Collection) Validate() error {
 		if f.Name == "" {
 			return fmt.Errorf("collection %q has a field with empty Name", c.Name)
 		}
-		if !identRe.MatchString(f.Name) {
-			return fmt.Errorf("collection %q field %q must match %s", c.Name, f.Name, identRe.String())
+		if !IdentRe.MatchString(f.Name) {
+			return fmt.Errorf("collection %q field %q must match %s", c.Name, f.Name, IdentRe.String())
 		}
 		if _, dup := seen[f.Name]; dup {
 			return fmt.Errorf("collection %q has duplicate field %q (or conflicts with reserved)", c.Name, f.Name)
 		}
 		seen[f.Name] = struct{}{}
-		if !knownType(f.Type) {
+		if !KnownType(f.Type) {
 			return fmt.Errorf("collection %q field %q has unknown type %q", c.Name, f.Name, f.Type)
 		}
 		switch f.Type {
@@ -116,7 +114,7 @@ func (c Collection) HasField(name string) bool {
 	return false
 }
 
-func (c Collection) field(name string) (Field, bool) {
+func (c Collection) FindField(name string) (Field, bool) {
 	for _, f := range c.Fields {
 		if f.Name == name {
 			return f, true
@@ -125,7 +123,7 @@ func (c Collection) field(name string) (Field, bool) {
 	return Field{}, false
 }
 
-func knownType(t FieldType) bool {
+func KnownType(t FieldType) bool {
 	switch t {
 	case TString, TText, TInt, TFloat, TBool, TDateTime, TBelongsTo, THasMany:
 		return true

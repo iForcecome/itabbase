@@ -6,7 +6,7 @@ import (
 
 	_ "github.com/gogf/gf/contrib/drivers/sqlite/v2"
 
-	itab "github.com/iForcecome/itabbase/server"
+	itab "ksogit.kingsoft.net/wpsee/itabbase/server"
 )
 
 func main() {

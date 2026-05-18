@@ -6,4 +6,4 @@ server:
 database:
   default:
     type: "sqlite"
-    link: "sqlite::@file(./data.db)"
+    link: "sqlite::@file(./data/data.db)"

@@ -1,8 +1,7 @@
-package itab
+package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +10,8 @@ import (
 	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
+
+	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/model"
 )
 
 const (
@@ -18,11 +19,11 @@ const (
 	defaultPageSize = 20
 )
 
-func (k *Kernel) handleList(c Collection) ghttp.HandlerFunc {
+func (e *Env) HandleList(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		ctx := r.Context()
 		buildModel := func() *gdb.Model {
-			m := k.db.Model(c.Name).Ctx(ctx)
+			m := e.DB.Model(c.Name).Ctx(ctx)
 			for key, vals := range r.URL.Query() {
 				if !strings.HasPrefix(key, "filter[") || !strings.HasSuffix(key, "]") {
 					continue
@@ -89,7 +90,7 @@ func (k *Kernel) handleList(c Collection) ghttp.HandlerFunc {
 
 		list := rows.List()
 		if includes := parseIncludes(r); len(includes) > 0 {
-			if err := k.resolveIncludes(r.Context(), c, list, includes); err != nil {
+			if err := e.resolveIncludes(r.Context(), c, list, includes); err != nil {
 				writeErr(r, http.StatusInternalServerError, "include resolution failed", err)
 				return
 			}
@@ -104,10 +105,10 @@ func (k *Kernel) handleList(c Collection) ghttp.HandlerFunc {
 	}
 }
 
-func (k *Kernel) handleGet(c Collection) ghttp.HandlerFunc {
+func (e *Env) HandleGet(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		id := r.Get("id").String()
-		rec, err := k.db.Model(c.Name).Ctx(r.Context()).Where("id", id).One()
+		rec, err := e.DB.Model(c.Name).Ctx(r.Context()).Where("id", id).One()
 		if err != nil {
 			writeErr(r, http.StatusInternalServerError, "query failed", err)
 			return
@@ -118,7 +119,7 @@ func (k *Kernel) handleGet(c Collection) ghttp.HandlerFunc {
 		}
 		row := rec.Map()
 		if includes := parseIncludes(r); len(includes) > 0 {
-			if err := k.resolveIncludes(r.Context(), c, []map[string]any{row}, includes); err != nil {
+			if err := e.resolveIncludes(r.Context(), c, []map[string]any{row}, includes); err != nil {
 				writeErr(r, http.StatusInternalServerError, "include resolution failed", err)
 				return
 			}
@@ -127,7 +128,7 @@ func (k *Kernel) handleGet(c Collection) ghttp.HandlerFunc {
 	}
 }
 
-func (k *Kernel) handleCreate(c Collection) ghttp.HandlerFunc {
+func (e *Env) HandleCreate(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		ctx := r.Context()
 		body, err := readJSONBody(r)
@@ -141,16 +142,16 @@ func (k *Kernel) handleCreate(c Collection) ghttp.HandlerFunc {
 			return
 		}
 		var loadedMap map[string]any
-		txErr := k.db.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
-			txCtx = WithTxCtx(txCtx, tx)
-			rec := NewRecord(data)
+		txErr := e.DB.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
+			txCtx = model.WithTxCtx(txCtx, tx)
+			rec := model.NewRecord(data)
 			if h := c.Hooks.BeforeCreate; h != nil {
 				if err := h(txCtx, rec); err != nil {
-					return userErr(http.StatusBadRequest, "before-create rejected: "+err.Error())
+					return model.UserErr(http.StatusBadRequest, "before-create rejected: "+err.Error())
 				}
 			}
-			if err := k.validateFKs(txCtx, tx, c, rec.Map()); err != nil {
-				return userErr(http.StatusBadRequest, err.Error())
+			if err := e.validateFKs(txCtx, tx, c, rec.Map()); err != nil {
+				return model.UserErr(http.StatusBadRequest, err.Error())
 			}
 			result, err := tx.Model(c.Name).Ctx(txCtx).Insert(rec.Map())
 			if err != nil {
@@ -171,7 +172,7 @@ func (k *Kernel) handleCreate(c Collection) ghttp.HandlerFunc {
 			return
 		}
 		if c.Hooks.AfterCreate != nil {
-			if hookErr := c.Hooks.AfterCreate(ctx, NewRecord(loadedMap)); hookErr != nil {
+			if hookErr := c.Hooks.AfterCreate(ctx, model.NewRecord(loadedMap)); hookErr != nil {
 				g.Log().Warningf(ctx, "after-create hook %s: %v", c.Name, hookErr)
 			}
 		}
@@ -180,7 +181,7 @@ func (k *Kernel) handleCreate(c Collection) ghttp.HandlerFunc {
 	}
 }
 
-func (k *Kernel) handleUpdate(c Collection) ghttp.HandlerFunc {
+func (e *Env) HandleUpdate(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		ctx := r.Context()
 		id := r.Get("id").String()
@@ -199,13 +200,13 @@ func (k *Kernel) handleUpdate(c Collection) ghttp.HandlerFunc {
 			return
 		}
 		var loadedMap map[string]any
-		txErr := k.db.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
-			txCtx = WithTxCtx(txCtx, tx)
+		txErr := e.DB.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
+			txCtx = model.WithTxCtx(txCtx, tx)
 			data["id"] = id
-			rec := NewRecord(data)
+			rec := model.NewRecord(data)
 			if h := c.Hooks.BeforeUpdate; h != nil {
 				if err := h(txCtx, rec); err != nil {
-					return userErr(http.StatusBadRequest, "before-update rejected: "+err.Error())
+					return model.UserErr(http.StatusBadRequest, "before-update rejected: "+err.Error())
 				}
 			}
 			patch := map[string]any{}
@@ -215,8 +216,8 @@ func (k *Kernel) handleUpdate(c Collection) ghttp.HandlerFunc {
 				}
 				patch[k2] = v
 			}
-			if err := k.validateFKs(txCtx, tx, c, patch); err != nil {
-				return userErr(http.StatusBadRequest, err.Error())
+			if err := e.validateFKs(txCtx, tx, c, patch); err != nil {
+				return model.UserErr(http.StatusBadRequest, err.Error())
 			}
 			res, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).Update(patch)
 			if err != nil {
@@ -224,7 +225,7 @@ func (k *Kernel) handleUpdate(c Collection) ghttp.HandlerFunc {
 			}
 			affected, _ := res.RowsAffected()
 			if affected == 0 {
-				return userErr(http.StatusNotFound, "not found")
+				return model.UserErr(http.StatusNotFound, "not found")
 			}
 			loaded, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).One()
 			if err != nil {
@@ -237,7 +238,7 @@ func (k *Kernel) handleUpdate(c Collection) ghttp.HandlerFunc {
 			return
 		}
 		if c.Hooks.AfterUpdate != nil {
-			if hookErr := c.Hooks.AfterUpdate(ctx, NewRecord(loadedMap)); hookErr != nil {
+			if hookErr := c.Hooks.AfterUpdate(ctx, model.NewRecord(loadedMap)); hookErr != nil {
 				g.Log().Warningf(ctx, "after-update hook %s: %v", c.Name, hookErr)
 			}
 		}
@@ -245,24 +246,24 @@ func (k *Kernel) handleUpdate(c Collection) ghttp.HandlerFunc {
 	}
 }
 
-func (k *Kernel) handleDelete(c Collection) ghttp.HandlerFunc {
+func (e *Env) HandleDelete(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		ctx := r.Context()
 		id := r.Get("id").String()
 		var snapshot map[string]any
-		txErr := k.db.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
-			txCtx = WithTxCtx(txCtx, tx)
+		txErr := e.DB.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
+			txCtx = model.WithTxCtx(txCtx, tx)
 			loaded, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).One()
 			if err != nil {
 				return err
 			}
 			if loaded.IsEmpty() {
-				return userErr(http.StatusNotFound, "not found")
+				return model.UserErr(http.StatusNotFound, "not found")
 			}
 			snapshot = loaded.Map()
 			if h := c.Hooks.BeforeDelete; h != nil {
-				if err := h(txCtx, NewRecord(snapshot)); err != nil {
-					return userErr(http.StatusBadRequest, "before-delete rejected: "+err.Error())
+				if err := h(txCtx, model.NewRecord(snapshot)); err != nil {
+					return model.UserErr(http.StatusBadRequest, "before-delete rejected: "+err.Error())
 				}
 			}
 			res, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).Delete()
@@ -271,7 +272,7 @@ func (k *Kernel) handleDelete(c Collection) ghttp.HandlerFunc {
 			}
 			affected, _ := res.RowsAffected()
 			if affected == 0 {
-				return userErr(http.StatusNotFound, "not found")
+				return model.UserErr(http.StatusNotFound, "not found")
 			}
 			return nil
 		})
@@ -279,7 +280,7 @@ func (k *Kernel) handleDelete(c Collection) ghttp.HandlerFunc {
 			return
 		}
 		if c.Hooks.AfterDelete != nil && snapshot != nil {
-			if hookErr := c.Hooks.AfterDelete(ctx, NewRecord(snapshot)); hookErr != nil {
+			if hookErr := c.Hooks.AfterDelete(ctx, model.NewRecord(snapshot)); hookErr != nil {
 				g.Log().Warningf(ctx, "after-delete hook %s: %v", c.Name, hookErr)
 			}
 		}
@@ -287,12 +288,9 @@ func (k *Kernel) handleDelete(c Collection) ghttp.HandlerFunc {
 	}
 }
 
-// validateFKs ensures every belongs_to value in data points to an existing target row.
-// Runs inside the active transaction so it sees uncommitted writes from earlier in
-// the same operation.
-func (k *Kernel) validateFKs(ctx context.Context, tx gdb.TX, c Collection, data map[string]any) error {
+func (e *Env) validateFKs(ctx context.Context, tx gdb.TX, c model.Collection, data map[string]any) error {
 	for _, f := range c.Fields {
-		if f.Type != TBelongsTo {
+		if f.Type != model.TBelongsTo {
 			continue
 		}
 		v, ok := data[f.Name]
@@ -308,65 +306,4 @@ func (k *Kernel) validateFKs(ctx context.Context, tx gdb.TX, c Collection, data 
 		}
 	}
 	return nil
-}
-
-// writeOpError writes the appropriate HTTP response if err is non-nil.
-// Returns true when no error (caller should continue), false otherwise.
-func writeOpError(r *ghttp.Request, err error, fallbackMsg string) bool {
-	if err == nil {
-		return true
-	}
-	var oe *opError
-	if errors.As(err, &oe) {
-		writeErr(r, oe.Status, oe.Msg, nil)
-		return false
-	}
-	writeErr(r, http.StatusInternalServerError, fallbackMsg, err)
-	return false
-}
-
-func readJSONBody(r *ghttp.Request) (map[string]any, error) {
-	raw := r.GetBody()
-	if len(raw) == 0 {
-		return map[string]any{}, nil
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// pickFields filters the body to only fields declared in the collection.
-// When isCreate is true, missing required fields without a default raise an error.
-// Virtual fields (has_many) are always skipped — they have no DB column.
-func pickFields(c Collection, body map[string]any, isCreate bool) (map[string]any, error) {
-	out := map[string]any{}
-	for _, f := range c.Fields {
-		if f.IsVirtual() {
-			continue
-		}
-		v, present := body[f.Name]
-		if !present {
-			if isCreate {
-				if f.Default != nil {
-					out[f.Name] = f.Default
-				} else if f.Required {
-					return nil, fmt.Errorf("missing required field: %s", f.Name)
-				}
-			}
-			continue
-		}
-		out[f.Name] = v
-	}
-	return out, nil
-}
-
-func writeErr(r *ghttp.Request, status int, msg string, cause error) {
-	r.Response.Status = status
-	payload := g.Map{"error": msg}
-	if cause != nil {
-		payload["detail"] = cause.Error()
-	}
-	r.Response.WriteJsonExit(payload)
 }
