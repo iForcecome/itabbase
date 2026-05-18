@@ -6,16 +6,35 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.{vue,ts,js,css,md}\""
   },
   "dependencies": {
+    "@ant-design/icons-vue": "^7.0.1",
+    "@vueuse/core": "^14.3.0",
+    "ant-design-vue": "^4.2.6",
+    "axios": "^1.16.1",
+    "lucide-vue-next": "^1.0.0",
+    "nprogress": "^0.2.0",
+    "pinia": "^3.0.4",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^25.8.0",
+    "@types/nprogress": "^0.2.3",
     "@vitejs/plugin-vue": "^5.2.0",
-    "@vue/tsconfig": "^0.7.0",
+    "eslint": "^10.3.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.9.1",
+    "prettier": "^3.8.3",
     "typescript": "~5.7.0",
+    "typescript-eslint": "^8.59.3",
+    "unplugin-auto-import": "^21.0.0",
+    "unplugin-vue-components": "^32.0.0",
     "vite": "^6.0.0",
     "vue-tsc": "^2.2.0"
   }

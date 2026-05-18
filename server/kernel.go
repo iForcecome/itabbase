@@ -22,6 +22,7 @@ type Kernel struct {
 	apiPrefix     string
 	auth          AuthAdapter
 	aclDisabled   bool
+	builtinAuth   bool
 	customRoutes  []Route
 	reservedPaths []string
 }
@@ -115,22 +116,32 @@ func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 	if err := k.checkReservedPaths(); err != nil {
 		return err
 	}
-	if err := k.syncCollections(context.Background()); err != nil {
-		return fmt.Errorf("itab: schema sync: %w", err)
+
+	ctx := context.Background()
+
+	// Phase 1: sync builtin tables (including _collections / _fields).
+	if err := k.syncCollections(ctx); err != nil {
+		return fmt.Errorf("itab: schema sync (builtins): %w", err)
 	}
-	if err := k.ensureBootstrap(context.Background()); err != nil {
+
+	// Phase 2: load dynamic collections from _collections + _fields DB tables.
+	if err := k.loadDynamicCollections(ctx); err != nil {
+		return fmt.Errorf("itab: load dynamic collections: %w", err)
+	}
+
+	// Phase 3: sync dynamic collection tables (CREATE TABLE / ADD COLUMN).
+	if err := k.syncCollections(ctx); err != nil {
+		return fmt.Errorf("itab: schema sync (dynamic): %w", err)
+	}
+
+	// Phase 4: bootstrap seed data (roles, admin user, default settings).
+	if err := k.ensureBootstrap(ctx); err != nil {
 		return fmt.Errorf("itab: bootstrap: %w", err)
 	}
+
 	var registerErr error
 	group.Group(k.apiPrefix, func(sub *ghttp.RouterGroup) {
-		for i := range k.collections {
-			c := k.collections[i]
-			sub.GET(c.Name, k.aclWrap(c, ActionList, k.handleList(c)))
-			sub.GET(c.Name+"/:id", k.aclWrap(c, ActionGet, k.handleGet(c)))
-			sub.POST(c.Name, k.aclWrap(c, ActionCreate, k.handleCreate(c)))
-			sub.PATCH(c.Name+"/:id", k.aclWrap(c, ActionUpdate, k.handleUpdate(c)))
-			sub.DELETE(c.Name+"/:id", k.aclWrap(c, ActionDelete, k.handleDelete(c)))
-		}
+		// 1. Custom routes first (most specific paths).
 		for _, route := range k.customRoutes {
 			wrapped := k.routeACLWrap(route.ACL, route.Handler)
 			if err := mountCustomRoute(sub, route, wrapped); err != nil {
@@ -138,9 +149,34 @@ func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 				return
 			}
 		}
-		// Meta endpoints under <apiPrefix>/meta/*, auth required.
+
+		// 2. Auth endpoints (only when using built-in auth).
+		if k.builtinAuth {
+			sub.POST("/auth/local/login", k.handleLocalLogin)
+			sub.POST("/auth/logout", k.handleLogout)
+		}
+
+		// 3. Meta endpoints (explicit paths, highest priority).
 		sub.GET("/meta/whoami", k.routeACLWrap(RequireAuthed(), k.handleWhoami))
 		sub.GET("/meta/collections", k.routeACLWrap(RequireAuthed(), k.handleMetaCollections))
+
+		// 4. Dynamic collection management API (admin-only).
+		sub.POST("/meta/collections", k.routeACLWrap(RequireRole("admin"), k.handleCreateCollection))
+		sub.PATCH("/meta/collections/:name", k.routeACLWrap(RequireRole("admin"), k.handleUpdateCollection))
+		sub.DELETE("/meta/collections/:name", k.routeACLWrap(RequireRole("admin"), k.handleDeleteCollection))
+		sub.POST("/meta/collections/:name/fields", k.routeACLWrap(RequireRole("admin"), k.handleAddField))
+		sub.PATCH("/meta/collections/:name/fields/:fieldName", k.routeACLWrap(RequireRole("admin"), k.handleUpdateField))
+		sub.DELETE("/meta/collections/:name/fields/:fieldName", k.routeACLWrap(RequireRole("admin"), k.handleDeleteField))
+
+		// 5. Universal dynamic CRUD — resolves collection by name at request time.
+		// This handles ALL collections (builtin + code + dynamic), including ones
+		// created at runtime after Mount(). GoFrame routes exact paths (meta/*)
+		// before parameter paths (/:_col), so there are no conflicts.
+		sub.GET("/:_col", k.dynamicCRUD(ActionList))
+		sub.GET("/:_col/:id", k.dynamicCRUD(ActionGet))
+		sub.POST("/:_col", k.dynamicCRUD(ActionCreate))
+		sub.PATCH("/:_col/:id", k.dynamicCRUD(ActionUpdate))
+		sub.DELETE("/:_col/:id", k.dynamicCRUD(ActionDelete))
 	})
 	if registerErr != nil {
 		return registerErr

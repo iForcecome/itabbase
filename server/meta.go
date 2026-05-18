@@ -11,14 +11,15 @@ import (
 // when the kernel runs in WithoutAuth mode.
 func (k *Kernel) handleWhoami(r *ghttp.Request) {
 	if u, ok := UserFromCtx(r.Context()); ok {
+		roles, _, _ := rolesFromCtx(r.Context())
 		r.Response.WriteJsonExit(g.Map{
-			"data": g.Map{"id": u.ID, "name": u.Name},
+			"data": g.Map{"id": u.ID, "name": u.Name, "roles": roles},
 		})
 		return
 	}
 	if k.aclDisabled {
 		r.Response.WriteJsonExit(g.Map{
-			"data": g.Map{"id": "anonymous", "name": "Anonymous (auth disabled)"},
+			"data": g.Map{"id": "anonymous", "name": "Anonymous (auth disabled)", "roles": []string{"admin"}},
 		})
 		return
 	}
@@ -59,10 +60,16 @@ func collectionMeta(c Collection) g.Map {
 		}
 		fields = append(fields, fm)
 	}
+	source := c.Source
+	if source == "" {
+		source = SourceCode
+	}
 	out := g.Map{
-		"name":    c.Name,
-		"display": c.Display,
-		"fields":  fields,
+		"name":     c.Name,
+		"display":  c.Display,
+		"fields":   fields,
+		"source":   source,
+		"internal": c.Internal,
 	}
 	if c.ACL != nil {
 		out["acl"] = c.ACL

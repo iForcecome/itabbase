@@ -25,6 +25,9 @@ type Collection struct {
 	Fields  []Field
 	ACL     ACL
 	Hooks   Hooks
+
+	Source   string // "builtin", "code", or "dynamic"; empty treated as "code"
+	Internal bool   // internal collections are hidden from the data management sidebar
 }
 
 type Field struct {
@@ -47,7 +50,7 @@ func (f Field) IsRelation() bool {
 	return f.Type == TBelongsTo || f.Type == THasMany
 }
 
-var identRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+var identRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 func (c Collection) Validate() error {
 	if c.Name == "" {

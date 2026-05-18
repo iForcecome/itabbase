@@ -14,7 +14,7 @@ func main() {
 
 	k := itab.New(
 		itab.WithDB(g.DB()),
-		itab.WithoutAuth(),
+		itab.WithBuiltinAuth(),
 	)
 
 	s.Group("/", func(group *ghttp.RouterGroup) {

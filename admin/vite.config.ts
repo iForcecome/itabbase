@@ -1,33 +1,50 @@
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+import tailwindcss from "@tailwindcss/vite";
+import Components from "unplugin-vue-components/vite";
+import { AntDesignVueResolver } from "unplugin-vue-components/resolvers";
+import AutoImport from "unplugin-auto-import/vite";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-// Dev backend (Go server with pathPrefix). To target a different scaffold,
-// edit this constant. Default matches itab-xxxxxx (config.dev.yaml:
-// server.pathPrefix).
-const DEV_API_BASE = 'http://localhost:8080/itab/ai-base-demo'
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const DEV_API_BASE = "http://localhost:8080";
 
 export default defineConfig({
-  plugins: [vue()],
-  // Relative asset paths so the embedded SPA works under any pathPrefix.
-  base: './',
+  base: "./",
+  plugins: [
+    vue(),
+    tailwindcss(),
+    Components({
+      resolvers: [AntDesignVueResolver({ importStyle: false, resolveIcons: true })],
+      dts: "src/types/components.d.ts",
+    }),
+    AutoImport({
+      imports: ["vue", "vue-router", "pinia", "@vueuse/core"],
+      dts: "src/types/auto-imports.d.ts",
+      eslintrc: { enabled: true },
+    }),
+  ],
+  resolve: { alias: { "@": resolve(__dirname, "src") } },
   build: {
-    // Output into the Go server's embed root; admin_embed.go has
-    // `//go:embed all:web` (Go embed cannot reach `..`).
-    outDir: '../server/web',
+    outDir: "../server/web",
     emptyOutDir: true,
-    target: 'es2022',
+    target: "es2022",
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vue: ["vue", "vue-router", "pinia"],
+        },
+      },
+    },
   },
   server: {
-    // 8079 to coexist with scaffold's client/ on 8081 (strictPort there).
-    // Auth login uses ?return=window.location.href, so any localhost:* works;
-    // cookies (host-only on localhost) are shared across ports.
     port: 8079,
     strictPort: true,
     proxy: {
-      // SPA uses relative URLs `../api/...`; from vite root they resolve
-      // to /api/..., proxied to the kernel under the dev pathPrefix.
-      '/api': { target: DEV_API_BASE, changeOrigin: true },
+      "/api": { target: DEV_API_BASE, changeOrigin: true },
     },
   },
-})
+});

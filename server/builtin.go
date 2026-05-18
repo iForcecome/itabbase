@@ -9,10 +9,16 @@ import (
 // Builtin collection names. Kernel auto-registers these on New(); business
 // code calling RegisterCollection with these names will panic (duplicate).
 const (
-	BuiltinUsers     = "users"
-	BuiltinRoles     = "roles"
-	BuiltinUserRoles = "user_roles"
-	BuiltinSettings  = "system_settings"
+	BuiltinUsers          = "users"
+	BuiltinRoles          = "roles"
+	BuiltinUserRoles      = "user_roles"
+	BuiltinSettings       = "system_settings"
+	BuiltinMetaCollections = "_collections"
+	BuiltinMetaFields      = "_fields"
+
+	SourceBuiltin = "builtin"
+	SourceCode    = "code"
+	SourceDynamic = "dynamic"
 )
 
 // User lifecycle status values stored in `users.status`.
@@ -24,8 +30,10 @@ const (
 
 func builtinUsersCollection() Collection {
 	return Collection{
-		Name:    BuiltinUsers,
-		Display: "用户",
+		Name:     BuiltinUsers,
+		Display:  "用户",
+		Source:   SourceBuiltin,
+		Internal: true,
 		Fields: []Field{
 			{Name: "username", Type: TString, MaxLen: 64},
 			{Name: "external_id", Type: TString, MaxLen: 128},
@@ -47,8 +55,10 @@ func builtinUsersCollection() Collection {
 
 func builtinSettingsCollection() Collection {
 	return Collection{
-		Name:    BuiltinSettings,
-		Display: "系统设置",
+		Name:     BuiltinSettings,
+		Display:  "系统设置",
+		Source:   SourceBuiltin,
+		Internal: true,
 		Fields: []Field{
 			{Name: "key", Type: TString, Required: true, MaxLen: 64},
 			{Name: "value", Type: TString, MaxLen: 500},
@@ -61,8 +71,10 @@ func builtinSettingsCollection() Collection {
 
 func builtinRolesCollection() Collection {
 	return Collection{
-		Name:    BuiltinRoles,
-		Display: "角色",
+		Name:     BuiltinRoles,
+		Display:  "角色",
+		Source:   SourceBuiltin,
+		Internal: true,
 		Fields: []Field{
 			{Name: "name", Type: TString, Required: true, MaxLen: 64},
 			{Name: "display", Type: TString, MaxLen: 200},
@@ -76,8 +88,10 @@ func builtinRolesCollection() Collection {
 
 func builtinUserRolesCollection() Collection {
 	return Collection{
-		Name:    BuiltinUserRoles,
-		Display: "用户角色",
+		Name:     BuiltinUserRoles,
+		Display:  "用户角色",
+		Source:   SourceBuiltin,
+		Internal: true,
 		Fields: []Field{
 			{Name: "user_id", Type: TBelongsTo, Target: BuiltinUsers, Required: true},
 			{Name: "role_id", Type: TBelongsTo, Target: BuiltinRoles, Required: true},
@@ -86,6 +100,44 @@ func builtinUserRolesCollection() Collection {
 			"admin": {ActionAll},
 			"user":  {ActionList, ActionGet},
 		},
+	}
+}
+
+func builtinMetaCollectionsCollection() Collection {
+	return Collection{
+		Name:     BuiltinMetaCollections,
+		Display:  "集合定义",
+		Source:   SourceBuiltin,
+		Internal: true,
+		Fields: []Field{
+			{Name: "name", Type: TString, Required: true, MaxLen: 64},
+			{Name: "display", Type: TString, MaxLen: 200},
+			{Name: "icon", Type: TString, MaxLen: 64},
+			{Name: "sort", Type: TInt, Default: 0},
+		},
+		ACL: ACL{"admin": {ActionAll}},
+	}
+}
+
+func builtinMetaFieldsCollection() Collection {
+	return Collection{
+		Name:     BuiltinMetaFields,
+		Display:  "字段定义",
+		Source:   SourceBuiltin,
+		Internal: true,
+		Fields: []Field{
+			{Name: "collection_name", Type: TString, Required: true, MaxLen: 64},
+			{Name: "name", Type: TString, Required: true, MaxLen: 64},
+			{Name: "type", Type: TString, Required: true, MaxLen: 32},
+			{Name: "display", Type: TString, MaxLen: 200},
+			{Name: "required", Type: TBool, Default: false},
+			{Name: "default_value", Type: TString, MaxLen: 500},
+			{Name: "max_len", Type: TInt, Default: 0},
+			{Name: "target", Type: TString, MaxLen: 64},
+			{Name: "through", Type: TString, MaxLen: 64},
+			{Name: "sort", Type: TInt, Default: 0},
+		},
+		ACL: ACL{"admin": {ActionAll}},
 	}
 }
 
@@ -100,8 +152,14 @@ func (k *Kernel) registerBuiltins() {
 		builtinRolesCollection(),
 		builtinUserRolesCollection(),
 		builtinSettingsCollection(),
+		builtinMetaCollectionsCollection(),
+		builtinMetaFieldsCollection(),
 	}
 	for _, c := range cols {
+		if c.Source == "" {
+			c.Source = SourceBuiltin
+			c.Internal = true
+		}
 		if err := c.Validate(); err != nil {
 			panic("itab builtin: " + err.Error())
 		}

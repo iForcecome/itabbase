@@ -1,291 +1,492 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { api, type MetaCollection, type MetaField } from '../api'
+import { api, type MetaCollection, type MetaField } from "@/api";
+import { useUserStore } from "@/stores/user";
+import { message } from "ant-design-vue";
 
-const props = defineProps<{ name: string }>()
+const props = defineProps<{ name: string }>();
+const userStore = useUserStore();
 
-const rows = ref<Record<string, unknown>[]>([])
-const meta = ref<MetaCollection | null>(null)
-const total = ref(0)
-const page = ref(1)
-const size = ref(20)
-const loading = ref(false)
-const error = ref('')
+const rows = ref<Record<string, unknown>[]>([]);
+const total = ref(0);
+const page = ref(1);
+const size = ref(20);
+const loading = ref(false);
+const error = ref("");
+const sortField = ref("");
+const sortOrder = ref<"ascend" | "descend" | null>(null);
 
-// Fields hidden from the edit form (auto-managed or sensitive).
-const HIDDEN_FIELDS = new Set(['id', 'password_hash'])
+const HIDDEN_FIELDS = new Set(["password_hash"]);
 
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
-const columns = computed<string[]>(() => {
-  if (rows.value.length === 0) return []
-  return Object.keys(rows.value[0])
-})
-const editableFields = computed<MetaField[]>(() => {
-  if (!meta.value) return []
+const meta = computed<MetaCollection | undefined>(() =>
+  userStore.collections.find((c) => c.name === props.name),
+);
+
+const visibleFields = computed<MetaField[]>(() => {
+  if (!meta.value) return [];
   return meta.value.fields.filter(
-    (f) => !HIDDEN_FIELDS.has(f.name) && f.type !== 'has_many',
-  )
-})
+    (f) => !HIDDEN_FIELDS.has(f.name) && f.type !== "has_many",
+  );
+});
 
-// Approval-flow awareness: any collection whose row has a `status` field
-// supports the pending → active/rejected workflow inline.
-const hasStatusField = computed(() =>
-  meta.value?.fields.some((f) => f.name === 'status') ?? false,
-)
-const pendingCount = computed(() =>
-  rows.value.filter((r) => (r as Record<string, unknown>).status === 'pending').length,
-)
+const editableFields = computed<MetaField[]>(() => {
+  if (!meta.value) return [];
+  return meta.value.fields.filter(
+    (f) =>
+      !HIDDEN_FIELDS.has(f.name) && f.name !== "id" && f.type !== "has_many",
+  );
+});
+
+const hasStatusField = computed(
+  () => meta.value?.fields.some((f) => f.name === "status") ?? false,
+);
+const pendingCount = computed(
+  () => rows.value.filter((r) => r.status === "pending").length,
+);
 function isPending(row: Record<string, unknown>): boolean {
-  return hasStatusField.value && row.status === 'pending'
+  return hasStatusField.value && row.status === "pending";
 }
 
-// Edit/Create modal state
-type FormMode = { kind: 'create' } | { kind: 'edit'; id: number | string }
-const formMode = ref<FormMode | null>(null)
-const formData = ref<Record<string, unknown>>({})
-const formError = ref('')
-const submitting = ref(false)
-
-async function loadMeta() {
-  const cols = await api.collections()
-  meta.value = cols.data.find((c) => c.name === props.name) || null
+function getFieldType(fieldName: string): string | undefined {
+  return meta.value?.fields.find((f) => f.name === fieldName)?.type;
 }
+
+const tableColumns = computed(() => {
+  const idCol = {
+    title: "ID",
+    dataIndex: "id",
+    key: "id",
+    width: 70,
+    sorter: true,
+    sortOrder: sortField.value === "id" ? sortOrder.value : undefined,
+  };
+  const fieldCols = visibleFields.value.map((f) => {
+    const col: Record<string, unknown> = {
+      title: fieldLabel(f),
+      dataIndex: f.name,
+      key: f.name,
+      ellipsis: true,
+    };
+    if (f.type !== "belongs_to") {
+      col.sorter = true;
+      col.sortOrder = sortField.value === f.name ? sortOrder.value : undefined;
+    }
+    if (f.type === "bool") col.width = 80;
+    if (f.type === "datetime") col.width = 180;
+    return col;
+  });
+  return [
+    idCol,
+    ...fieldCols,
+    { title: "操作", key: "actions", fixed: "right" as const, width: 220 },
+  ];
+});
+
+const tablePagination = computed(() => ({
+  current: page.value,
+  pageSize: size.value,
+  total: total.value,
+  showSizeChanger: true,
+  showTotal: (t: number) => `共 ${t} 条`,
+  pageSizeOptions: ["10", "20", "50", "100"],
+}));
+
+type FormMode = { kind: "create" } | { kind: "edit"; id: number | string };
+const formMode = ref<FormMode | null>(null);
+const formData = ref<Record<string, unknown>>({});
+const formError = ref("");
+const submitting = ref(false);
 
 async function load() {
-  loading.value = true
-  error.value = ''
+  loading.value = true;
+  error.value = "";
   try {
-    await loadMeta()
-    const r = await api.list(props.name, page.value, size.value)
-    rows.value = r.data as Record<string, unknown>[]
-    total.value = r.total
+    let params = "";
+    if (sortField.value && sortOrder.value) {
+      const prefix = sortOrder.value === "descend" ? "-" : "";
+      params = `sort=${prefix}${sortField.value}`;
+    }
+    const r = await api.list(props.name, page.value, size.value, params);
+    rows.value = r.data as Record<string, unknown>[];
+    total.value = r.total;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = err instanceof Error ? err.message : String(err);
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 watch(
   () => props.name,
   () => {
-    page.value = 1
-    load()
+    page.value = 1;
+    sortField.value = "";
+    sortOrder.value = null;
+    load();
   },
   { immediate: true },
-)
+);
 
-function prev() {
-  if (page.value > 1) { page.value--; load() }
-}
-function next() {
-  if (page.value < totalPages.value) { page.value++; load() }
+function handleTableChange(
+  pag: { current?: number; pageSize?: number },
+  _filters: any,
+  sorter: any,
+) {
+  page.value = pag.current ?? 1;
+  size.value = pag.pageSize ?? 20;
+  const s = Array.isArray(sorter) ? sorter[0] : sorter;
+  if (s?.field) {
+    sortField.value = String(s.field);
+    sortOrder.value = s.order ?? null;
+  } else {
+    sortField.value = "";
+    sortOrder.value = null;
+  }
+  load();
 }
 
-function formatCell(v: unknown): string {
-  if (v === null || v === undefined) return '—'
-  if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
+function fieldLabel(f: MetaField): string {
+  return (f as any).display || f.name;
+}
+
+function formatCell(v: unknown, type?: string): string {
+  if (v === null || v === undefined) return "—";
+  if (type === "bool") return v ? "是" : "否";
+  if (type === "datetime" && typeof v === "string") {
+    try {
+      return new Date(v).toLocaleString("zh-CN");
+    } catch {
+      return v;
+    }
+  }
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+function statusColor(status: unknown): string {
+  switch (status) {
+    case "pending":
+      return "orange";
+    case "active":
+      return "green";
+    case "rejected":
+      return "red";
+    default:
+      return "default";
+  }
+}
+
+function rowLabel(row: Record<string, unknown>): string {
+  return String(
+    row.display_name || row.username || row.name || row.title || row.id || "",
+  );
 }
 
 function openCreate() {
-  formMode.value = { kind: 'create' }
-  formData.value = {}
+  formMode.value = { kind: "create" };
+  formData.value = {};
   for (const f of editableFields.value) {
-    formData.value[f.name] = f.default ?? ''
+    if (f.type === "bool") {
+      formData.value[f.name] = f.default ?? false;
+    } else if (
+      f.type === "int" ||
+      f.type === "float" ||
+      f.type === "belongs_to"
+    ) {
+      formData.value[f.name] = f.default ?? null;
+    } else {
+      formData.value[f.name] = f.default ?? "";
+    }
   }
-  formError.value = ''
+  formError.value = "";
 }
 
 function openEdit(row: Record<string, unknown>) {
-  const id = row.id as number | string
-  formMode.value = { kind: 'edit', id }
-  formData.value = {}
+  const id = row.id as number | string;
+  formMode.value = { kind: "edit", id };
+  formData.value = {};
   for (const f of editableFields.value) {
-    formData.value[f.name] = row[f.name] ?? ''
+    formData.value[f.name] = row[f.name] ?? "";
   }
-  formError.value = ''
+  formError.value = "";
 }
 
 function closeForm() {
-  formMode.value = null
-  formError.value = ''
+  formMode.value = null;
+  formError.value = "";
 }
 
 async function submitForm() {
-  if (!formMode.value) return
-  submitting.value = true
-  formError.value = ''
+  if (!formMode.value) return;
+  submitting.value = true;
+  formError.value = "";
   try {
-    // Coerce types per field schema
-    const payload: Record<string, unknown> = {}
+    const payload: Record<string, unknown> = {};
     for (const f of editableFields.value) {
-      const v = formData.value[f.name]
-      if (v === '' || v === null || v === undefined) continue
-      if (f.type === 'int' || f.type === 'belongs_to') {
-        payload[f.name] = Number(v)
-      } else if (f.type === 'float') {
-        payload[f.name] = Number(v)
-      } else if (f.type === 'bool') {
-        payload[f.name] = Boolean(v)
+      const v = formData.value[f.name];
+      if (v === "" || v === null || v === undefined) continue;
+      if (f.type === "int" || f.type === "belongs_to") {
+        payload[f.name] = Number(v);
+      } else if (f.type === "float") {
+        payload[f.name] = Number(v);
+      } else if (f.type === "bool") {
+        payload[f.name] = Boolean(v);
       } else {
-        payload[f.name] = v
+        payload[f.name] = v;
       }
     }
-    if (formMode.value.kind === 'create') {
-      await api.create(props.name, payload)
+    if (formMode.value.kind === "create") {
+      await api.create(props.name, payload);
+      message.success("创建成功");
     } else {
-      await api.update(props.name, formMode.value.id, payload)
+      await api.update(props.name, formMode.value.id, payload);
+      message.success("更新成功");
     }
-    closeForm()
-    await load()
+    closeForm();
+    await load();
   } catch (err) {
-    formError.value = err instanceof Error ? err.message : String(err)
+    formError.value = err instanceof Error ? err.message : String(err);
   } finally {
-    submitting.value = false
+    submitting.value = false;
   }
 }
 
 async function doDelete(row: Record<string, unknown>) {
-  const id = row.id
-  if (id === undefined) return
-  const label = row.display_name || row.username || row.name || row.title || id
-  if (!confirm(`确定删除 ${props.name} #${id} (${label})?`)) return
+  const id = row.id;
+  if (id === undefined) return;
   try {
-    await api.remove(props.name, id as number | string)
-    await load()
+    await api.remove(props.name, id as number | string);
+    message.success("删除成功");
+    await load();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = err instanceof Error ? err.message : String(err);
   }
 }
 
 async function approveRow(row: Record<string, unknown>) {
-  const id = row.id
-  if (id === undefined) return
-  const label = row.display_name || row.username || id
-  if (!confirm(`通过申请: ${label}?`)) return
+  const id = row.id;
+  if (id === undefined) return;
   try {
-    await api.update(props.name, id as number | string, { status: 'active' })
-    await load()
+    await api.update(props.name, id as number | string, { status: "active" });
+    message.success("已批准");
+    await load();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = err instanceof Error ? err.message : String(err);
   }
 }
 
 async function rejectRow(row: Record<string, unknown>) {
-  const id = row.id
-  if (id === undefined) return
-  const label = row.display_name || row.username || id
-  if (!confirm(`拒绝申请: ${label}?`)) return
+  const id = row.id;
+  if (id === undefined) return;
   try {
-    await api.update(props.name, id as number | string, { status: 'rejected' })
-    await load()
+    await api.update(props.name, id as number | string, {
+      status: "rejected",
+    });
+    message.success("已拒绝");
+    await load();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = err instanceof Error ? err.message : String(err);
   }
 }
 </script>
 
 <template>
-  <div class="collection-view">
-    <header class="cv-head">
-      <h2>{{ meta?.display || name }}</h2>
-      <span class="meta">共 {{ total }} 条</span>
-      <span v-if="pendingCount > 0" class="badge-pending">
-        {{ pendingCount }} 待审批
-      </span>
-      <span class="spacer" />
-      <button class="btn primary" @click="openCreate" :disabled="!meta">新建</button>
-    </header>
-    <p v-if="error" class="error">{{ error }}</p>
-    <div v-if="loading" class="loading">加载中…</div>
-    <div v-else-if="rows.length === 0" class="empty">无数据</div>
-    <div v-else class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th v-for="c in columns" :key="c">{{ c }}</th>
-            <th class="actions-col">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="(row, i) in rows"
-            :key="i"
-            :class="{ 'row-pending': isPending(row) }"
-          >
-            <td v-for="c in columns" :key="c">
-              <template v-if="c === 'status' && hasStatusField">
-                <span class="status-badge" :data-status="String(row[c])">
-                  {{ formatCell(row[c]) }}
-                </span>
-              </template>
-              <template v-else>{{ formatCell(row[c]) }}</template>
-            </td>
-            <td class="actions-col">
-              <template v-if="isPending(row)">
-                <button class="link approve" @click="approveRow(row)">通过</button>
-                <button class="link reject" @click="rejectRow(row)">拒绝</button>
-              </template>
-              <button class="link" @click="openEdit(row)">编辑</button>
-              <button class="link danger" @click="doDelete(row)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <div>
+    <div
+      style="
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+      "
+    >
+      <a-typography-title :level="4" style="margin: 0">
+        {{ meta?.display || name }}
+      </a-typography-title>
+      <a-tag color="blue">共 {{ total }} 条</a-tag>
+      <a-badge
+        v-if="pendingCount > 0"
+        :count="pendingCount"
+        :overflow-count="99"
+      >
+        <a-tag color="orange">待审批</a-tag>
+      </a-badge>
+      <div style="flex: 1" />
+      <a-button type="primary" :disabled="!meta" @click="openCreate">
+        <PlusOutlined /> 新建
+      </a-button>
     </div>
-    <footer class="pager">
-      <button class="link" :disabled="page <= 1" @click="prev">«</button>
-      <span>{{ page }} / {{ totalPages }}</span>
-      <button class="link" :disabled="page >= totalPages" @click="next">»</button>
-    </footer>
 
-    <!-- Edit / Create modal -->
-    <div v-if="formMode" class="modal-backdrop" @click.self="closeForm">
-      <div class="modal">
-        <header class="modal-head">
-          <h3>{{ formMode.kind === 'create' ? '新建' : '编辑' }} · {{ meta?.display || name }}</h3>
-          <button class="link" @click="closeForm">×</button>
-        </header>
-        <form class="modal-form" @submit.prevent="submitForm">
-          <div v-for="f in editableFields" :key="f.name" class="field">
-            <label>
-              <span>{{ f.name }}<em v-if="f.required" class="req">*</em></span>
-              <span class="field-hint">{{ f.type }}<span v-if="f.target"> → {{ f.target }}</span></span>
-            </label>
-            <textarea
-              v-if="f.type === 'text'"
-              v-model="formData[f.name] as string"
-              rows="3"
-            />
-            <input
-              v-else-if="f.type === 'bool'"
-              type="checkbox"
-              :checked="!!formData[f.name]"
-              @change="formData[f.name] = ($event.target as HTMLInputElement).checked"
-            />
-            <input
-              v-else-if="f.type === 'int' || f.type === 'float' || f.type === 'belongs_to'"
-              v-model="formData[f.name] as number | string"
-              type="number"
-              :step="f.type === 'float' ? 'any' : '1'"
-            />
-            <input
-              v-else
-              v-model="formData[f.name] as string"
-              type="text"
-              :maxlength="f.max_len || undefined"
-            />
-          </div>
-          <p v-if="formError" class="form-error">{{ formError }}</p>
-          <div class="modal-actions">
-            <button type="button" class="btn" @click="closeForm">取消</button>
-            <button type="submit" class="btn primary" :disabled="submitting">
-              {{ submitting ? '保存中…' : '保存' }}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <a-alert
+      v-if="error"
+      type="error"
+      :message="error"
+      show-icon
+      closable
+      style="margin-bottom: 16px"
+      @close="error = ''"
+    />
+
+    <a-table
+      :columns="tableColumns"
+      :data-source="rows"
+      :loading="loading"
+      :pagination="tablePagination"
+      :scroll="{ x: 'max-content' }"
+      :row-class-name="
+        (record: Record<string, unknown>) =>
+          isPending(record) ? 'row-pending' : ''
+      "
+      row-key="id"
+      size="middle"
+      @change="handleTableChange"
+    >
+      <template #bodyCell="{ column, record, text }">
+        <template v-if="column.key === 'status' && hasStatusField">
+          <a-tag :color="statusColor(text)">{{ formatCell(text) }}</a-tag>
+        </template>
+        <template v-else-if="column.key === 'actions'">
+          <a-space :size="0">
+            <template v-if="isPending(record)">
+              <a-popconfirm
+                :title="`通过申请: ${rowLabel(record)}?`"
+                ok-text="确定"
+                cancel-text="取消"
+                @confirm="approveRow(record)"
+              >
+                <a-button
+                  type="link"
+                  size="small"
+                  style="color: #52c41a; padding: 0 6px"
+                >
+                  通过
+                </a-button>
+              </a-popconfirm>
+              <a-popconfirm
+                :title="`拒绝申请: ${rowLabel(record)}?`"
+                ok-text="确定"
+                cancel-text="取消"
+                @confirm="rejectRow(record)"
+              >
+                <a-button
+                  type="link"
+                  size="small"
+                  style="color: #fa8c16; padding: 0 6px"
+                >
+                  拒绝
+                </a-button>
+              </a-popconfirm>
+            </template>
+            <a-button
+              type="link"
+              size="small"
+              style="padding: 0 6px"
+              @click="openEdit(record)"
+            >
+              编辑
+            </a-button>
+            <a-popconfirm
+              :title="`确定删除 ${name} #${record.id} (${rowLabel(record)})?`"
+              ok-text="确定"
+              cancel-text="取消"
+              @confirm="doDelete(record)"
+            >
+              <a-button type="link" danger size="small" style="padding: 0 6px">
+                删除
+              </a-button>
+            </a-popconfirm>
+          </a-space>
+        </template>
+        <template v-else-if="column.key === 'id'">
+          {{ text }}
+        </template>
+        <template v-else>
+          <template v-if="getFieldType(column.key as string) === 'bool'">
+            <a-tag :color="text ? 'green' : 'default'">{{
+              text ? "是" : "否"
+            }}</a-tag>
+          </template>
+          <template
+            v-else-if="getFieldType(column.key as string) === 'datetime'"
+          >
+            {{ formatCell(text, "datetime") }}
+          </template>
+          <template v-else>
+            {{ formatCell(text) }}
+          </template>
+        </template>
+      </template>
+    </a-table>
+
+    <a-modal
+      :open="!!formMode"
+      :title="
+        (formMode?.kind === 'create' ? '新建' : '编辑') +
+        ' · ' +
+        (meta?.display || name)
+      "
+      :confirm-loading="submitting"
+      ok-text="保存"
+      cancel-text="取消"
+      :destroy-on-close="true"
+      @ok="submitForm"
+      @cancel="closeForm"
+    >
+      <a-form :model="formData" layout="vertical" style="margin-top: 16px">
+        <a-form-item
+          v-for="f in editableFields"
+          :key="f.name"
+          :label="fieldLabel(f)"
+          :required="f.required"
+        >
+          <template #extra>
+            {{ f.type }}{{ f.target ? ` → ${f.target}` : "" }}
+          </template>
+          <a-textarea
+            v-if="f.type === 'text'"
+            :value="(formData[f.name] as string)"
+            @update:value="(val: any) => (formData[f.name] = val)"
+            :rows="3"
+          />
+          <a-switch
+            v-else-if="f.type === 'bool'"
+            :checked="!!formData[f.name]"
+            @update:checked="(val: any) => (formData[f.name] = !!val)"
+          />
+          <a-input-number
+            v-else-if="
+              f.type === 'int' || f.type === 'float' || f.type === 'belongs_to'
+            "
+            :value="formData[f.name] as number"
+            @update:value="(val: any) => (formData[f.name] = val)"
+            :step="f.type === 'float' ? 0.01 : 1"
+            style="width: 100%"
+          />
+          <a-date-picker
+            v-else-if="f.type === 'datetime'"
+            :value="(formData[f.name] as any)"
+            @update:value="(val: any) => (formData[f.name] = val)"
+            show-time
+            style="width: 100%"
+            value-format="YYYY-MM-DD HH:mm:ss"
+          />
+          <a-input
+            v-else
+            :value="(formData[f.name] as string)"
+            @update:value="(val: any) => (formData[f.name] = val)"
+            :maxlength="f.max_len || undefined"
+          />
+        </a-form-item>
+      </a-form>
+      <a-alert v-if="formError" type="error" :message="formError" show-icon />
+    </a-modal>
   </div>
 </template>
+
+<style scoped>
+:deep(.row-pending) {
+  background-color: #fffbe6;
+}
+:deep(.row-pending:hover > td) {
+  background-color: #fff7d6 !important;
+}
+</style>

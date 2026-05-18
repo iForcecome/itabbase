@@ -46,11 +46,14 @@ export interface MetaCollection {
   display: string
   fields: MetaField[]
   acl?: Record<string, string[]>
+  source: 'builtin' | 'code' | 'dynamic'
+  internal: boolean
 }
 
 export interface User {
   id: string
   name: string
+  roles?: string[]
 }
 
 export interface ListResult<T = Record<string, unknown>> {
@@ -60,11 +63,37 @@ export interface ListResult<T = Record<string, unknown>> {
   size: number
 }
 
+export interface CreateCollectionPayload {
+  name: string
+  display?: string
+  fields: Array<{
+    name: string
+    type: string
+    display?: string
+    required?: boolean
+    default_value?: string
+    max_len?: number
+    target?: string
+    through?: string
+  }>
+}
+
+export interface AddFieldPayload {
+  name: string
+  type: string
+  display?: string
+  required?: boolean
+  default_value?: string
+  max_len?: number
+  target?: string
+  through?: string
+}
+
 export const api = {
   whoami: () => request<{ data: User }>('GET', '/meta/whoami'),
   collections: () => request<{ data: MetaCollection[] }>('GET', '/meta/collections'),
-  list: (name: string, page: number, size: number) =>
-    request<ListResult>('GET', `/${name}?page=${page}&size=${size}`),
+  list: (name: string, page: number, size: number, params?: string) =>
+    request<ListResult>('GET', `/${name}?page=${page}&size=${size}${params ? '&' + params : ''}`),
   get: (name: string, id: number | string) =>
     request<{ data: Record<string, unknown> }>('GET', `/${name}/${id}`),
   create: (name: string, body: Record<string, unknown>) =>
@@ -76,6 +105,19 @@ export const api = {
   logout: () => request<unknown>('POST', '/auth/logout').catch(() => undefined),
   localLogin: (username: string, password: string) =>
     request<{ data: User }>('POST', '/auth/local/login', { username, password }),
+
+  createCollection: (payload: CreateCollectionPayload) =>
+    request<{ data: MetaCollection }>('POST', '/meta/collections', payload),
+  updateCollection: (name: string, body: Record<string, unknown>) =>
+    request<{ data: MetaCollection }>('PATCH', `/meta/collections/${name}`, body),
+  deleteCollection: (name: string) =>
+    request<{ data: { name: string } }>('DELETE', `/meta/collections/${name}`),
+  addField: (colName: string, field: AddFieldPayload) =>
+    request<{ data: MetaCollection }>('POST', `/meta/collections/${colName}/fields`, field),
+  updateField: (colName: string, fieldName: string, body: Record<string, unknown>) =>
+    request<{ data: MetaCollection }>('PATCH', `/meta/collections/${colName}/fields/${fieldName}`, body),
+  deleteField: (colName: string, fieldName: string) =>
+    request<{ data: MetaCollection }>('DELETE', `/meta/collections/${colName}/fields/${fieldName}`),
 }
 
 export function loginURL(returnTo: string): string {

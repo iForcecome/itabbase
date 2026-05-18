@@ -1,0 +1,34 @@
+---
+description: it-ai-base
+alwaysApply: true
+---
+
+# 架构（强制）
+
+- 前端 **`client/`**，后端 **`server/`**，代码互不越界。
+- 改 `client/` 遵循 `.cursor/skills/itab-client/SKILL.md`；改 `server/` 遵循 `.cursor/skills/itab-server/SKILL.md`。
+- 前后端只经 HTTP(S) 或约定通道通信；鉴权、业务规则、持久化以后端为准。
+
+# 本地开发（强制）
+
+- 修改 `server/` Go 代码后，必须重启后端服务使改动生效：`kill $(lsof -ti :8080); cd server && go run .`
+- 前端 `client/` 使用 Vite dev server（端口 8081），代码改动自动热更新，无需手动重启。
+- 如果对应服务未运行，先启动再验证。
+
+# Skill 元信息（强制）
+
+- 每个 Skill 的 `SKILL.md` 必须包含 YAML frontmatter，字段及格式如下：
+  ```yaml
+  ---
+  name: skill-name          # 必填，与目录名一致
+  description: >-            # 必填，一句话描述功能和触发条件
+    简要描述...
+  version: "0.1.0"           # 必填，语义化版本号，每次变更递增
+  type: Backend              # 必填，Frontend / Backend / Fullstack 三选一
+  tags: go, api, service     # 必填，逗号分隔的关键词
+  icon: "lucide:wrench"      # 必填，iconify 格式，推荐 lucide 图标集
+  author: "作者名"            # 必填，团队或个人名称
+  ---
+  ```
+- 新建或修改 Skill 时必须同步更新 `version` 字段。
+- `icon` 使用 `lucide:icon-name` 格式（参考 https://lucide.dev/icons）。
