@@ -47,7 +47,10 @@ func LoadDynamic(ctx context.Context, db gdb.DB, existing []model.Collection) ([
 	var result []model.Collection
 	for _, row := range colRows.List() {
 		name, _ := row["name"].(string)
+		tableName, _ := row["table_name"].(string)
 		display, _ := row["display"].(string)
+		ownerField, _ := row["owner_field"].(string)
+		titleField, _ := row["title_field"].(string)
 		if _, exists := FindCollection(existing, name); exists {
 			g.Log().Warningf(ctx, "[itab] skip dynamic collection %q: name conflicts with existing", name)
 			continue
@@ -57,10 +60,13 @@ func LoadDynamic(ctx context.Context, db gdb.DB, existing []model.Collection) ([
 			continue
 		}
 		c := model.Collection{
-			Name:    name,
-			Display: display,
-			Fields:  fields,
-			Source:   model.SourceDynamic,
+			Name:       name,
+			TableName:  tableName,
+			Display:    display,
+			Fields:     fields,
+			OwnerField: ownerField,
+			TitleField: titleField,
+			Source:     model.SourceDynamic,
 		}
 		if err := c.Validate(); err != nil {
 			g.Log().Warningf(ctx, "[itab] skip invalid dynamic collection %q: %v", name, err)

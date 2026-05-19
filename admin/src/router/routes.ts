@@ -43,6 +43,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/views/settings/index.vue"),
         meta: { title: "系统设置" },
       },
+      {
+        path: "api-docs",
+        name: "ApiDocs",
+        component: () => import("@/views/api-docs/index.vue"),
+        meta: { title: "API 文档" },
+      },
     ],
   },
   {

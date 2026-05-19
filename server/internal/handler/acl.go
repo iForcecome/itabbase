@@ -45,11 +45,13 @@ func (e *Env) ACLWrap(c model.Collection, action string, h ghttp.HandlerFunc) gh
 	}
 }
 
-// RouteACLWrap returns a handler that enforces RouteACL before delegating.
-func (e *Env) RouteACLWrap(acl model.RouteACL, h ghttp.HandlerFunc) ghttp.HandlerFunc {
+// RouteACLWrap returns a handler that enforces RouteACL (and optional owner-scope
+// checks when Route.Collection is set) before delegating.
+func (e *Env) RouteACLWrap(route model.Route, h ghttp.HandlerFunc) ghttp.HandlerFunc {
 	if e.ACLDisabled {
 		return h
 	}
+	acl := route.ACL
 	return func(r *ghttp.Request) {
 		u, err := e.Auth.CurrentUser(r)
 		authed := err == nil
@@ -60,6 +62,9 @@ func (e *Env) RouteACLWrap(acl model.RouteACL, h ghttp.HandlerFunc) ghttp.Handle
 			r.SetCtx(ctx)
 			if len(acl.Roles) > 0 && !anyMatch(acl.Roles, userRoles) {
 				writeErr(r, http.StatusForbidden, "forbidden", nil)
+				return
+			}
+			if !e.checkRouteOwner(r, route) {
 				return
 			}
 			h(r)
@@ -76,6 +81,42 @@ func (e *Env) RouteACLWrap(acl model.RouteACL, h ghttp.HandlerFunc) ghttp.Handle
 		}
 		writeErr(r, http.StatusUnauthorized, "unauthenticated", nil)
 	}
+}
+
+// checkRouteOwner verifies the current user owns the record referenced by
+// the route's Collection + IDParam. Returns true if OK, false if denied
+// (response already written).
+func (e *Env) checkRouteOwner(r *ghttp.Request, route model.Route) bool {
+	if route.Collection == "" || route.IDParam == "" {
+		return true
+	}
+	e.Mu.RLock()
+	c, ok := e.FindCollection(route.Collection)
+	e.Mu.RUnlock()
+	if !ok || c.OwnerField == "" {
+		return true
+	}
+	oField, oUID := ownerScope(c, r.Context())
+	if oUID == 0 {
+		return true
+	}
+	recordID := r.GetRouter(route.IDParam).String()
+	if recordID == "" {
+		return true
+	}
+	n, err := e.DB.Model(c.DBTable()).Ctx(r.Context()).
+		Where("id", recordID).
+		Where(oField, oUID).
+		Count()
+	if err != nil {
+		writeErr(r, http.StatusInternalServerError, "owner check failed", err)
+		return false
+	}
+	if n == 0 {
+		writeErr(r, http.StatusNotFound, "not found", nil)
+		return false
+	}
+	return true
 }
 
 // MountCustomRoute registers a custom route on the given router group.

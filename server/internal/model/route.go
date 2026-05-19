@@ -8,6 +8,9 @@ type Route struct {
 	Path    string
 	Handler ghttp.HandlerFunc
 	ACL     RouteACL
+
+	Collection string // if set, the route is bound to this collection for owner-scope checks
+	IDParam    string // URL param name that holds the record ID (used with Collection)
 }
 
 // RouteACL controls access to a custom route.

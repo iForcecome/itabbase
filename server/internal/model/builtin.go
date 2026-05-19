@@ -6,8 +6,8 @@ const (
 	BuiltinRoles           = "roles"
 	BuiltinUserRoles       = "user_roles"
 	BuiltinSettings        = "system_settings"
-	BuiltinMetaCollections = "_collections"
-	BuiltinMetaFields      = "_fields"
+	BuiltinMetaCollections = "collections"
+	BuiltinMetaFields      = "fields"
 
 	SourceBuiltin = "builtin"
 	SourceCode    = "code"

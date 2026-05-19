@@ -33,6 +33,10 @@
           <template #icon><SettingOutlined /></template>
           <span>系统设置</span>
         </a-menu-item>
+        <a-menu-item key="/api-docs">
+          <template #icon><ApiOutlined /></template>
+          <span>API 文档</span>
+        </a-menu-item>
       </a-menu>
     </a-layout-sider>
 
@@ -77,6 +81,7 @@ const selectedKeys = computed(() => {
   if (path.startsWith("/datasource")) return ["/datasource"];
   if (path.startsWith("/access")) return ["/access"];
   if (path.startsWith("/settings")) return ["/settings"];
+  if (path.startsWith("/api-docs")) return ["/api-docs"];
   return ["/dashboard"];
 });
 

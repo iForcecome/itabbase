@@ -17,10 +17,11 @@ func BuiltinCollections() []model.Collection {
 
 func builtinUsersCollection() model.Collection {
 	return model.Collection{
-		Name:     model.BuiltinUsers,
-		Display:  "用户",
-		Source:   model.SourceBuiltin,
-		Internal: true,
+		Name:       model.BuiltinUsers,
+		Display:    "用户",
+		TitleField: "display_name",
+		Source:     model.SourceBuiltin,
+		Internal:   true,
 		Fields: []model.Field{
 			{Name: "username", Type: model.TString, MaxLen: 64},
 			{Name: "external_id", Type: model.TString, MaxLen: 128},
@@ -51,10 +52,11 @@ func builtinUsersCollection() model.Collection {
 
 func builtinSettingsCollection() model.Collection {
 	return model.Collection{
-		Name:     model.BuiltinSettings,
-		Display:  "系统设置",
-		Source:   model.SourceBuiltin,
-		Internal: true,
+		Name:       model.BuiltinSettings,
+		Display:    "系统设置",
+		TitleField: "key",
+		Source:     model.SourceBuiltin,
+		Internal:   true,
 		Fields: []model.Field{
 			{Name: "key", Type: model.TString, Required: true, MaxLen: 64},
 			{Name: "value", Type: model.TString, MaxLen: 500},
@@ -67,10 +69,11 @@ func builtinSettingsCollection() model.Collection {
 
 func builtinRolesCollection() model.Collection {
 	return model.Collection{
-		Name:     model.BuiltinRoles,
-		Display:  "角色",
-		Source:   model.SourceBuiltin,
-		Internal: true,
+		Name:       model.BuiltinRoles,
+		Display:    "角色",
+		TitleField: "display",
+		Source:     model.SourceBuiltin,
+		Internal:   true,
 		Fields: []model.Field{
 			{Name: "name", Type: model.TString, Required: true, MaxLen: 64},
 			{Name: "display", Type: model.TString, MaxLen: 200},
@@ -107,9 +110,12 @@ func builtinMetaCollectionsCollection() model.Collection {
 		Internal: true,
 		Fields: []model.Field{
 			{Name: "name", Type: model.TString, Required: true, MaxLen: 64},
+			{Name: "table_name", Type: model.TString, MaxLen: 64},
 			{Name: "display", Type: model.TString, MaxLen: 200},
 			{Name: "icon", Type: model.TString, MaxLen: 64},
 			{Name: "sort", Type: model.TInt, Default: 0},
+			{Name: "owner_field", Type: model.TString, MaxLen: 64},
+			{Name: "title_field", Type: model.TString, MaxLen: 64},
 		},
 		ACL: model.ACL{"admin": {model.ActionAll}},
 	}

@@ -36,7 +36,8 @@ func SyncNonBuiltin(ctx context.Context, db gdb.DB, cols []model.Collection) err
 }
 
 func syncOne(ctx context.Context, db gdb.DB, dialect string, c model.Collection) error {
-	exists, err := tableExists(ctx, db, dialect, c.Name)
+	tbl := c.DBTable()
+	exists, err := tableExists(ctx, db, dialect, tbl)
 	if err != nil {
 		return err
 	}
@@ -47,7 +48,7 @@ func syncOne(ctx context.Context, db gdb.DB, dialect string, c model.Collection)
 		}
 		return nil
 	}
-	cols, err := tableColumns(ctx, db, c.Name)
+	cols, err := tableColumns(ctx, db, tbl)
 	if err != nil {
 		return err
 	}
@@ -58,9 +59,9 @@ func syncOne(ctx context.Context, db gdb.DB, dialect string, c model.Collection)
 		if _, ok := cols[f.Name]; ok {
 			continue
 		}
-		stmt := BuildAddColumn(dialect, c.Name, f)
+		stmt := BuildAddColumn(dialect, tbl, f)
 		if _, err := db.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("add column %s.%s: %w", c.Name, f.Name, err)
+			return fmt.Errorf("add column %s.%s: %w", tbl, f.Name, err)
 		}
 	}
 	return nil
@@ -110,7 +111,7 @@ func tableColumns(ctx context.Context, db gdb.DB, name string) (map[string]gdb.T
 func BuildCreateTable(dialect string, c model.Collection) string {
 	var b strings.Builder
 	b.WriteString("CREATE TABLE ")
-	b.WriteString(QuoteIdent(dialect, c.Name))
+	b.WriteString(QuoteIdent(dialect, c.DBTable()))
 	b.WriteString(" (\n")
 	b.WriteString("  ")
 	b.WriteString(idColumnDef(dialect))

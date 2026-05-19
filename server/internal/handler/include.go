@@ -102,7 +102,7 @@ func (e *Env) includeBelongsTo(ctx context.Context, f model.Field, rows []map[st
 	if len(ids) == 0 {
 		return nil
 	}
-	targets, err := e.DB.Model(f.Target).Ctx(ctx).WhereIn("id", ids).All()
+	targets, err := e.DB.Model(e.resolveTable(f.Target)).Ctx(ctx).WhereIn("id", ids).All()
 	if err != nil {
 		return fmt.Errorf("load belongs_to %s: %w", f.Name, err)
 	}
@@ -126,7 +126,7 @@ func (e *Env) includeHasMany(ctx context.Context, f model.Field, rows []map[stri
 	if len(parentIDs) == 0 {
 		return nil
 	}
-	related, err := e.DB.Model(f.Target).Ctx(ctx).WhereIn(f.Through, parentIDs).All()
+	related, err := e.DB.Model(e.resolveTable(f.Target)).Ctx(ctx).WhereIn(f.Through, parentIDs).All()
 	if err != nil {
 		return fmt.Errorf("load has_many %s: %w", f.Name, err)
 	}

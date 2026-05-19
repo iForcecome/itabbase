@@ -54,6 +54,8 @@ func (e *Env) HandleCreateCollection(r *ghttp.Request) {
 	}
 	name, _ := body["name"].(string)
 	display, _ := body["display"].(string)
+	ownerField, _ := body["owner_field"].(string)
+	titleField, _ := body["title_field"].(string)
 	fieldsRaw, _ := body["fields"].([]any)
 
 	if name == "" {
@@ -64,6 +66,7 @@ func (e *Env) HandleCreateCollection(r *ghttp.Request) {
 		writeErr(r, http.StatusBadRequest, fmt.Sprintf("name %q must match %s", name, model.IdentRe.String()), nil)
 		return
 	}
+	tableName := "t_" + name
 	for _, rp := range e.ReservedPaths {
 		if name == rp {
 			writeErr(r, http.StatusConflict, fmt.Sprintf("name %q is reserved", name), nil)
@@ -85,20 +88,31 @@ func (e *Env) HandleCreateCollection(r *ghttp.Request) {
 	}
 
 	c := model.Collection{
-		Name:    name,
-		Display: display,
-		Fields:  fields,
-		Source:   model.SourceDynamic,
+		Name:       name,
+		TableName:  tableName,
+		Display:    display,
+		Fields:     fields,
+		OwnerField: ownerField,
+		TitleField: titleField,
+		Source:     model.SourceDynamic,
 	}
 	if err := c.Validate(); err != nil {
 		writeErr(r, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 
-	if _, err := e.DB.Model(model.BuiltinMetaCollections).Ctx(ctx).Insert(g.Map{
-		"name":    name,
-		"display": display,
-	}); err != nil {
+	metaRow := g.Map{
+		"name":       name,
+		"table_name": tableName,
+		"display":    display,
+	}
+	if ownerField != "" {
+		metaRow["owner_field"] = ownerField
+	}
+	if titleField != "" {
+		metaRow["title_field"] = titleField
+	}
+	if _, err := e.DB.Model(model.BuiltinMetaCollections).Ctx(ctx).Insert(metaRow); err != nil {
 		writeErr(r, http.StatusInternalServerError, "failed to save collection metadata", err)
 		return
 	}
@@ -170,6 +184,12 @@ func (e *Env) HandleUpdateCollection(r *ghttp.Request) {
 	if v, ok := body["sort"]; ok {
 		patch["sort"] = v
 	}
+	if v, ok := body["title_field"]; ok {
+		patch["title_field"] = v
+	}
+	if v, ok := body["owner_field"]; ok {
+		patch["owner_field"] = v
+	}
 	if len(patch) == 0 {
 		writeErr(r, http.StatusBadRequest, "nothing to update", nil)
 		return
@@ -185,6 +205,12 @@ func (e *Env) HandleUpdateCollection(r *ghttp.Request) {
 		if (*e.Collections)[i].Name == name {
 			if d, ok := patch["display"].(string); ok {
 				(*e.Collections)[i].Display = d
+			}
+			if v, ok := patch["title_field"].(string); ok {
+				(*e.Collections)[i].TitleField = v
+			}
+			if v, ok := patch["owner_field"].(string); ok {
+				(*e.Collections)[i].OwnerField = v
 			}
 			c = (*e.Collections)[i]
 			break
@@ -213,7 +239,7 @@ func (e *Env) HandleDeleteCollection(r *ghttp.Request) {
 	}
 
 	dialect := schema.Dialect(e.DB)
-	dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", schema.QuoteIdent(dialect, name))
+	dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", schema.QuoteIdent(dialect, c.DBTable()))
 	if _, err := e.DB.Exec(ctx, dropSQL); err != nil {
 		writeErr(r, http.StatusInternalServerError, "failed to drop table", err)
 		return
@@ -297,7 +323,7 @@ func (e *Env) HandleAddField(r *ghttp.Request) {
 
 	if !f.IsVirtual() {
 		dialect := schema.Dialect(e.DB)
-		stmt := schema.BuildAddColumn(dialect, colName, f)
+		stmt := schema.BuildAddColumn(dialect, c.DBTable(), f)
 		if _, err := e.DB.Exec(ctx, stmt); err != nil {
 			e.DB.Model(model.BuiltinMetaFields).Ctx(ctx).
 				Where("collection_name", colName).

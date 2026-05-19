@@ -19,11 +19,36 @@ const (
 	defaultPageSize = 20
 )
 
+// ownerScope returns the owner field name and the current user's LocalID
+// for owner-scoped collections. uid == 0 means no filtering is needed
+// (OwnerField not configured, unauthenticated, or admin bypass).
+func ownerScope(c model.Collection, ctx context.Context) (field string, uid int64) {
+	if c.OwnerField == "" {
+		return "", 0
+	}
+	roles, _, _ := model.RolesFromCtx(ctx)
+	for _, r := range roles {
+		if r == "admin" {
+			return c.OwnerField, 0
+		}
+	}
+	u, ok := model.UserFromCtx(ctx)
+	if !ok {
+		return c.OwnerField, 0
+	}
+	return c.OwnerField, u.LocalID
+}
+
 func (e *Env) HandleList(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		ctx := r.Context()
+		oField, oUID := ownerScope(c, ctx)
+
 		buildModel := func() *gdb.Model {
-			m := e.DB.Model(c.Name).Ctx(ctx)
+			m := e.DB.Model(c.DBTable()).Ctx(ctx)
+			if oUID != 0 {
+				m = m.Where(oField, oUID)
+			}
 			for key, vals := range r.URL.Query() {
 				if !strings.HasPrefix(key, "filter[") || !strings.HasSuffix(key, "]") {
 					continue
@@ -107,8 +132,15 @@ func (e *Env) HandleList(c model.Collection) ghttp.HandlerFunc {
 
 func (e *Env) HandleGet(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
+		ctx := r.Context()
 		id := r.Get("id").String()
-		rec, err := e.DB.Model(c.Name).Ctx(r.Context()).Where("id", id).One()
+		oField, oUID := ownerScope(c, ctx)
+
+		m := e.DB.Model(c.DBTable()).Ctx(ctx).Where("id", id)
+		if oUID != 0 {
+			m = m.Where(oField, oUID)
+		}
+		rec, err := m.One()
 		if err != nil {
 			writeErr(r, http.StatusInternalServerError, "query failed", err)
 			return
@@ -119,7 +151,7 @@ func (e *Env) HandleGet(c model.Collection) ghttp.HandlerFunc {
 		}
 		row := rec.Map()
 		if includes := parseIncludes(r); len(includes) > 0 {
-			if err := e.resolveIncludes(r.Context(), c, []map[string]any{row}, includes); err != nil {
+			if err := e.resolveIncludes(ctx, c, []map[string]any{row}, includes); err != nil {
 				writeErr(r, http.StatusInternalServerError, "include resolution failed", err)
 				return
 			}
@@ -141,6 +173,13 @@ func (e *Env) HandleCreate(c model.Collection) ghttp.HandlerFunc {
 			writeErr(r, http.StatusBadRequest, err.Error(), nil)
 			return
 		}
+
+		if c.OwnerField != "" {
+			if u, ok := model.UserFromCtx(ctx); ok {
+				data[c.OwnerField] = u.LocalID
+			}
+		}
+
 		var loadedMap map[string]any
 		txErr := e.DB.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
 			txCtx = model.WithTxCtx(txCtx, tx)
@@ -153,12 +192,12 @@ func (e *Env) HandleCreate(c model.Collection) ghttp.HandlerFunc {
 			if err := e.validateFKs(txCtx, tx, c, rec.Map()); err != nil {
 				return model.UserErr(http.StatusBadRequest, err.Error())
 			}
-			result, err := tx.Model(c.Name).Ctx(txCtx).Insert(rec.Map())
+			result, err := tx.Model(c.DBTable()).Ctx(txCtx).Insert(rec.Map())
 			if err != nil {
 				return err
 			}
 			id, _ := result.LastInsertId()
-			loaded, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).One()
+			loaded, err := tx.Model(c.DBTable()).Ctx(txCtx).Where("id", id).One()
 			if err != nil {
 				return err
 			}
@@ -199,6 +238,13 @@ func (e *Env) HandleUpdate(c model.Collection) ghttp.HandlerFunc {
 			writeErr(r, http.StatusBadRequest, "no valid fields to update", nil)
 			return
 		}
+		oField, oUID := ownerScope(c, ctx)
+
+		// prevent client from changing the owner field
+		if c.OwnerField != "" {
+			delete(data, c.OwnerField)
+		}
+
 		var loadedMap map[string]any
 		txErr := e.DB.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
 			txCtx = model.WithTxCtx(txCtx, tx)
@@ -219,7 +265,11 @@ func (e *Env) HandleUpdate(c model.Collection) ghttp.HandlerFunc {
 			if err := e.validateFKs(txCtx, tx, c, patch); err != nil {
 				return model.UserErr(http.StatusBadRequest, err.Error())
 			}
-			res, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).Update(patch)
+			q := tx.Model(c.DBTable()).Ctx(txCtx).Where("id", id)
+			if oUID != 0 {
+				q = q.Where(oField, oUID)
+			}
+			res, err := q.Update(patch)
 			if err != nil {
 				return err
 			}
@@ -227,7 +277,7 @@ func (e *Env) HandleUpdate(c model.Collection) ghttp.HandlerFunc {
 			if affected == 0 {
 				return model.UserErr(http.StatusNotFound, "not found")
 			}
-			loaded, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).One()
+			loaded, err := tx.Model(c.DBTable()).Ctx(txCtx).Where("id", id).One()
 			if err != nil {
 				return err
 			}
@@ -250,10 +300,16 @@ func (e *Env) HandleDelete(c model.Collection) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		ctx := r.Context()
 		id := r.Get("id").String()
+		oField, oUID := ownerScope(c, ctx)
+
 		var snapshot map[string]any
 		txErr := e.DB.Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
 			txCtx = model.WithTxCtx(txCtx, tx)
-			loaded, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).One()
+			q := tx.Model(c.DBTable()).Ctx(txCtx).Where("id", id)
+			if oUID != 0 {
+				q = q.Where(oField, oUID)
+			}
+			loaded, err := q.One()
 			if err != nil {
 				return err
 			}
@@ -266,7 +322,7 @@ func (e *Env) HandleDelete(c model.Collection) ghttp.HandlerFunc {
 					return model.UserErr(http.StatusBadRequest, "before-delete rejected: "+err.Error())
 				}
 			}
-			res, err := tx.Model(c.Name).Ctx(txCtx).Where("id", id).Delete()
+			res, err := tx.Model(c.DBTable()).Ctx(txCtx).Where("id", id).Delete()
 			if err != nil {
 				return err
 			}
@@ -297,7 +353,7 @@ func (e *Env) validateFKs(ctx context.Context, tx gdb.TX, c model.Collection, da
 		if !ok || v == nil {
 			continue
 		}
-		n, err := tx.Model(f.Target).Ctx(ctx).Where("id", v).Count()
+		n, err := tx.Model(e.resolveTable(f.Target)).Ctx(ctx).Where("id", v).Count()
 		if err != nil {
 			return fmt.Errorf("validate %s: %w", f.Name, err)
 		}

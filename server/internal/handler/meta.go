@@ -86,14 +86,21 @@ func CollectionMeta(c model.Collection) g.Map {
 		source = model.SourceCode
 	}
 	out := g.Map{
-		"name":     c.Name,
-		"display":  c.Display,
-		"fields":   fields,
-		"source":   source,
-		"internal": c.Internal,
+		"name":       c.Name,
+		"table_name": c.DBTable(),
+		"display":    c.Display,
+		"fields":     fields,
+		"source":     source,
+		"internal":   c.Internal,
 	}
 	if c.ACL != nil {
 		out["acl"] = c.ACL
+	}
+	if c.TitleField != "" {
+		out["title_field"] = c.TitleField
+	}
+	if c.OwnerField != "" {
+		out["owner_field"] = c.OwnerField
 	}
 	return out
 }

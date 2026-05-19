@@ -20,14 +20,26 @@ const (
 )
 
 type Collection struct {
-	Name    string
-	Display string
-	Fields  []Field
-	ACL     ACL
-	Hooks   Hooks
+	Name      string
+	TableName string // physical table name; when empty, defaults to Name
+	Display   string
+	Fields    []Field
+	ACL       ACL
+	Hooks     Hooks
+
+	OwnerField string // when non-empty, enables row-level ownership filtering on this field
+	TitleField string // representative display field for this collection (e.g. "name", "display_name")
 
 	Source   string // "builtin", "code", or "dynamic"; empty treated as "code"
 	Internal bool   // internal collections are hidden from the data management sidebar
+}
+
+// DBTable returns the physical table name for DB operations.
+func (c Collection) DBTable() string {
+	if c.TableName != "" {
+		return c.TableName
+	}
+	return c.Name
 }
 
 type Field struct {

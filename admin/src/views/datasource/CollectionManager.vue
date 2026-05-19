@@ -26,6 +26,11 @@
         <template v-else-if="column.key === 'actions'">
           <a-space>
             <a-button size="small" @click="openFields(record.name)">字段</a-button>
+            <a-button
+              v-if="record.source === 'dynamic'"
+              size="small"
+              @click="openEdit(record)"
+            >编辑</a-button>
             <a-popconfirm
               v-if="record.source === 'dynamic'"
               title="确定删除此集合？表和数据都会被删除！"
@@ -180,6 +185,42 @@
         </a-button>
       </a-form>
     </a-modal>
+    <!-- Edit Collection Modal -->
+    <a-modal
+      v-model:open="showEdit"
+      title="编辑集合"
+      :confirm-loading="editing"
+      @ok="handleEdit"
+    >
+      <a-form :model="editForm" layout="vertical" style="margin-top: 16px">
+        <a-form-item label="集合名称">
+          <a-input :value="editForm.name" disabled />
+        </a-form-item>
+        <a-form-item label="显示名称">
+          <a-input v-model:value="editForm.display" placeholder="显示名称" />
+        </a-form-item>
+        <a-form-item label="图标">
+          <a-input v-model:value="editForm.icon" placeholder="图标标识" />
+        </a-form-item>
+        <a-form-item label="标题字段">
+          <a-select
+            v-model:value="editForm.title_field"
+            placeholder="选择标题字段"
+            style="width: 100%"
+            allow-clear
+          >
+            <a-select-option
+              v-for="f in editFieldOptions"
+              :key="f"
+              :value="f"
+            >{{ f }}</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="排序">
+          <a-input-number v-model:value="editForm.sort" :min="0" style="width: 100%" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -194,10 +235,11 @@ const tableData = computed(() => userStore.collections);
 
 const columns = [
   { title: "名称", key: "name", dataIndex: "name" },
+  { title: "表名", key: "table_name", dataIndex: "table_name" },
   { title: "显示名", dataIndex: "display", key: "display" },
   { title: "来源", key: "source", dataIndex: "source", width: 100 },
   { title: "字段", key: "fields", width: 100 },
-  { title: "操作", key: "actions", width: 160 },
+  { title: "操作", key: "actions", width: 200 },
 ];
 
 const fieldColumns = [
@@ -267,6 +309,39 @@ async function handleDeleteField(fieldName: string) {
     message.success("字段已删除");
     await userStore.refreshCollections();
   } catch (err) { message.error(err instanceof Error ? err.message : "删除失败"); }
+}
+
+// --- Edit collection ---
+const showEdit = ref(false);
+const editing = ref(false);
+const editForm = reactive({ name: "", display: "", icon: "", title_field: "" as string | undefined, sort: 0 });
+const editFieldOptions = computed(() => {
+  const col = userStore.collections.find((c) => c.name === editForm.name);
+  if (!col) return [];
+  return col.fields.filter((f) => f.type === "string" || f.type === "text").map((f) => f.name);
+});
+
+function openEdit(record: MetaCollection) {
+  editForm.name = record.name;
+  editForm.display = record.display || "";
+  editForm.icon = (record as any).icon || "";
+  editForm.title_field = record.title_field || undefined;
+  editForm.sort = (record as any).sort || 0;
+  showEdit.value = true;
+}
+
+async function handleEdit() {
+  editing.value = true;
+  try {
+    await api.updateCollection(editForm.name, {
+      display: editForm.display, icon: editForm.icon,
+      title_field: editForm.title_field || "", sort: editForm.sort,
+    });
+    message.success("集合已更新");
+    await userStore.refreshCollections();
+    showEdit.value = false;
+  } catch (err) { message.error(err instanceof Error ? err.message : "更新失败"); }
+  finally { editing.value = false; }
 }
 
 // --- Create collection ---

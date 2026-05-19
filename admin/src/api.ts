@@ -48,6 +48,8 @@ export interface MetaCollection {
   acl?: Record<string, string[]>
   source: 'builtin' | 'code' | 'dynamic'
   internal: boolean
+  title_field?: string
+  owner_field?: string
 }
 
 export interface User {

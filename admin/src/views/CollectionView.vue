@@ -28,6 +28,14 @@ const visibleFields = computed<MetaField[]>(() => {
   );
 });
 
+const belongsToIncludes = computed(() => {
+  if (!meta.value) return "";
+  return meta.value.fields
+    .filter((f) => f.type === "belongs_to" && f.target)
+    .map((f) => f.name.replace(/_id$/, ""))
+    .join(",");
+});
+
 const editableFields = computed<MetaField[]>(() => {
   if (!meta.value) return [];
   return meta.value.fields.filter(
@@ -100,12 +108,15 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    let params = "";
+    const parts: string[] = [];
     if (sortField.value && sortOrder.value) {
       const prefix = sortOrder.value === "descend" ? "-" : "";
-      params = `sort=${prefix}${sortField.value}`;
+      parts.push(`sort=${prefix}${sortField.value}`);
     }
-    const r = await api.list(props.name, page.value, size.value, params);
+    if (belongsToIncludes.value) {
+      parts.push(`include=${belongsToIncludes.value}`);
+    }
+    const r = await api.list(props.name, page.value, size.value, parts.join("&") || undefined);
     rows.value = r.data as Record<string, unknown>[];
     total.value = r.total;
   } catch (err) {
@@ -160,6 +171,27 @@ function formatCell(v: unknown, type?: string): string {
   }
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
+}
+
+function resolveBelongsTo(
+  record: Record<string, unknown>,
+  field: MetaField,
+): string {
+  const embedKey = field.name.replace(/_id$/, "");
+  const obj = record[embedKey] as Record<string, unknown> | undefined;
+  if (!obj || typeof obj !== "object") return formatCell(record[field.name]);
+  const targetCol = userStore.collections.find(
+    (c) => c.name === field.target,
+  );
+  const tf = targetCol?.title_field;
+  return String(
+    (tf && obj[tf]) ||
+      obj["display_name"] ||
+      obj["name"] ||
+      obj["title"] ||
+      obj["id"] ||
+      record[field.name],
+  );
 }
 
 function statusColor(status: unknown): string {
@@ -409,6 +441,16 @@ async function rejectRow(row: Record<string, unknown>) {
             v-else-if="getFieldType(column.key as string) === 'datetime'"
           >
             {{ formatCell(text, "datetime") }}
+          </template>
+          <template
+            v-else-if="getFieldType(column.key as string) === 'belongs_to'"
+          >
+            {{
+              resolveBelongsTo(
+                record,
+                meta!.fields.find((f) => f.name === column.key)!,
+              )
+            }}
           </template>
           <template v-else>
             {{ formatCell(text) }}

@@ -178,11 +178,16 @@ func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 		ReservedPaths: k.reservedPaths,
 	}
 
+	// internalRoute builds a Route with only ACL set (no Collection binding).
+	internalRoute := func(acl RouteACL) Route {
+		return Route{ACL: acl}
+	}
+
 	var registerErr error
 	group.Group(k.apiPrefix, func(sub *ghttp.RouterGroup) {
 		// 1. Custom routes first.
 		for _, route := range k.customRoutes {
-			wrapped := env.RouteACLWrap(route.ACL, route.Handler)
+			wrapped := env.RouteACLWrap(route, route.Handler)
 			if err := handler.MountCustomRoute(sub, route, wrapped); err != nil {
 				registerErr = err
 				return
@@ -205,18 +210,27 @@ func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 		}
 
 		// 3. Meta endpoints.
-		sub.GET("/meta/whoami", env.RouteACLWrap(RequireAuthed(), env.HandleWhoami))
-		sub.GET("/meta/collections", env.RouteACLWrap(RequireAuthed(), env.HandleMetaCollections))
+		sub.GET("/meta/whoami", env.RouteACLWrap(internalRoute(RequireAuthed()), env.HandleWhoami))
+		sub.GET("/meta/collections", env.RouteACLWrap(internalRoute(RequireAuthed()), env.HandleMetaCollections))
 
 		// 4. Dynamic collection management API (admin-only).
-		sub.POST("/meta/collections", env.RouteACLWrap(RequireRole("admin"), env.HandleCreateCollection))
-		sub.PATCH("/meta/collections/:name", env.RouteACLWrap(RequireRole("admin"), env.HandleUpdateCollection))
-		sub.DELETE("/meta/collections/:name", env.RouteACLWrap(RequireRole("admin"), env.HandleDeleteCollection))
-		sub.POST("/meta/collections/:name/fields", env.RouteACLWrap(RequireRole("admin"), env.HandleAddField))
-		sub.PATCH("/meta/collections/:name/fields/:fieldName", env.RouteACLWrap(RequireRole("admin"), env.HandleUpdateField))
-		sub.DELETE("/meta/collections/:name/fields/:fieldName", env.RouteACLWrap(RequireRole("admin"), env.HandleDeleteField))
+		adminRoute := internalRoute(RequireRole("admin"))
+		sub.POST("/meta/collections", env.RouteACLWrap(adminRoute, env.HandleCreateCollection))
+		sub.PATCH("/meta/collections/:name", env.RouteACLWrap(adminRoute, env.HandleUpdateCollection))
+		sub.DELETE("/meta/collections/:name", env.RouteACLWrap(adminRoute, env.HandleDeleteCollection))
+		sub.POST("/meta/collections/:name/fields", env.RouteACLWrap(adminRoute, env.HandleAddField))
+		sub.PATCH("/meta/collections/:name/fields/:fieldName", env.RouteACLWrap(adminRoute, env.HandleUpdateField))
+		sub.DELETE("/meta/collections/:name/fields/:fieldName", env.RouteACLWrap(adminRoute, env.HandleDeleteField))
 
-		// 5. Universal dynamic CRUD.
+		// 5. OpenAPI spec (public, no auth required).
+		sub.GET("/docs.json", env.HandleOpenAPISpec(handler.OpenAPIOptions{
+			APIPrefix:    k.apiPrefix,
+			BuiltinAuth:  k.builtinAuth,
+			SSOEnabled:   k.ssoEnabled,
+			CustomRoutes: k.customRoutes,
+		}))
+
+		// 6. Universal dynamic CRUD.
 		sub.GET("/:_col", env.DynamicCRUD(ActionList))
 		sub.GET("/:_col/:id", env.DynamicCRUD(ActionGet))
 		sub.POST("/:_col", env.DynamicCRUD(ActionCreate))

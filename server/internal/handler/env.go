@@ -32,3 +32,12 @@ func (e *Env) FindCollection(name string) (model.Collection, bool) {
 func (e *Env) AllCollections() []model.Collection {
 	return *e.Collections
 }
+
+// resolveTable returns the physical table name for a collection name.
+// Falls back to the name itself if the collection is not found.
+func (e *Env) resolveTable(name string) string {
+	if c, ok := e.FindCollection(name); ok {
+		return c.DBTable()
+	}
+	return name
+}
