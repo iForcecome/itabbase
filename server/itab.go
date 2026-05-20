@@ -61,6 +61,7 @@ const (
 
 const (
 	BuiltinUsers           = model.BuiltinUsers
+	BuiltinSessions        = model.BuiltinSessions
 	BuiltinRoles           = model.BuiltinRoles
 	BuiltinUserRoles       = model.BuiltinUserRoles
 	BuiltinSettings        = model.BuiltinSettings
@@ -82,7 +83,10 @@ const (
 
 // --- Auth constants ---
 
-const RoleAnonymous = model.RoleAnonymous
+const (
+	RoleAnonymous            = model.RoleAnonymous
+	DefaultSessionCookieName = model.DefaultSessionCookieName
+)
 
 var ErrUnauthenticated = model.ErrUnauthenticated
 var ErrBadCredentials = model.ErrBadCredentials

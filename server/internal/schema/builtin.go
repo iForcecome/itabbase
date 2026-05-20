@@ -7,6 +7,7 @@ import "ksogit.kingsoft.net/wpsee/itabbase/server/internal/model"
 func BuiltinCollections() []model.Collection {
 	return []model.Collection{
 		builtinUsersCollection(),
+		builtinSessionsCollection(),
 		builtinRolesCollection(),
 		builtinUserRolesCollection(),
 		builtinSettingsCollection(),
@@ -25,15 +26,9 @@ func builtinUsersCollection() model.Collection {
 		Fields: []model.Field{
 			{Name: "username", Type: model.TString, MaxLen: 64},
 			{Name: "external_id", Type: model.TString, MaxLen: 128},
-			{Name: "login_name", Type: model.TString, MaxLen: 128},
 			{Name: "display_name", Type: model.TString, MaxLen: 200},
 			{Name: "avatar", Type: model.TString, MaxLen: 500},
 			{Name: "password_hash", Type: model.TString, MaxLen: 200},
-			{Name: "email", Type: model.TString, MaxLen: 200},
-			{Name: "phone", Type: model.TString, MaxLen: 32},
-			{Name: "gender", Type: model.TString, MaxLen: 16},
-			{Name: "employee_id", Type: model.TString, MaxLen: 64},
-			{Name: "title", Type: model.TString, MaxLen: 128},
 			{Name: "department", Type: model.TString, MaxLen: 256},
 			{Name: "department_path", Type: model.TString, MaxLen: 500},
 			{Name: "company_id", Type: model.TString, MaxLen: 128},
@@ -46,6 +41,25 @@ func builtinUsersCollection() model.Collection {
 		ACL: model.ACL{
 			"admin": {model.ActionAll},
 			"user":  {model.ActionList, model.ActionGet},
+		},
+	}
+}
+
+func builtinSessionsCollection() model.Collection {
+	return model.Collection{
+		Name:     model.BuiltinSessions,
+		Display:  "登录会话",
+		Source:   model.SourceBuiltin,
+		Internal: true,
+		Fields: []model.Field{
+			{Name: "sid", Type: model.TString, Required: true, MaxLen: 128},
+			{Name: "user_id", Type: model.TBelongsTo, Target: model.BuiltinUsers, Required: true},
+			{Name: "expires_at", Type: model.TDateTime, Required: true},
+			{Name: "created_at", Type: model.TDateTime},
+			{Name: "updated_at", Type: model.TDateTime},
+		},
+		ACL: model.ACL{
+			"admin": {model.ActionAll},
 		},
 	}
 }

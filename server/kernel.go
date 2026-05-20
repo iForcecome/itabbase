@@ -24,6 +24,7 @@ type Kernel struct {
 	auth          model.AuthAdapter
 	aclDisabled   bool
 	builtinAuth   bool
+	authConfig    model.SSOConfig
 	customRoutes  []model.Route
 	reservedPaths []string
 
@@ -69,23 +70,27 @@ func WithoutAuth() Option {
 // WithBuiltinAuth installs a session-based local password auth adapter.
 func WithBuiltinAuth() Option {
 	return func(k *Kernel) {
-		adapter := &auth.BuiltinAdapter{DB: k.db}
+		cfg := auth.SSOConfigDefaults(model.SSOConfig{})
+		adapter := &auth.BuiltinAdapter{DB: k.db, Config: cfg}
 		k.auth = adapter
 		k.aclDisabled = false
 		k.builtinAuth = true
+		k.authConfig = cfg
 	}
 }
 
 // WithSSOAuth installs an SSO-based auth adapter using the given provider.
 func WithSSOAuth(provider OAuthProvider, cfg SSOConfig) Option {
 	return func(k *Kernel) {
-		adapter := &auth.BuiltinAdapter{DB: k.db}
+		cfg = auth.SSOConfigDefaults(cfg)
+		adapter := &auth.BuiltinAdapter{DB: k.db, Config: cfg}
 		k.auth = adapter
 		k.aclDisabled = false
 		k.builtinAuth = true
 		k.ssoEnabled = true
 		k.ssoProvider = provider
 		k.ssoConfig = cfg
+		k.authConfig = cfg
 	}
 }
 
@@ -196,8 +201,8 @@ func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 
 		// 2. Auth endpoints.
 		if k.builtinAuth {
-			sub.POST("/auth/local/login", auth.HandleLocalLogin(k.db))
-			sub.POST("/auth/logout", auth.HandleLogout())
+			sub.POST("/auth/local/login", auth.HandleLocalLogin(k.db, k.authConfig))
+			sub.POST("/auth/logout", auth.HandleLogout(k.db, k.authConfig))
 		}
 		if k.ssoEnabled {
 			k.ssoHandler = &auth.SSOHandler{
@@ -215,7 +220,8 @@ func (k *Kernel) Mount(group *ghttp.RouterGroup) error {
 
 		// 4. Dynamic collection management API (admin-only).
 		adminRoute := internalRoute(RequireRole("admin"))
-		sub.POST("/meta/collections", env.RouteACLWrap(adminRoute, env.HandleCreateCollection))
+		// POST /meta/collections is upsert (apply) semantics; see handler.HandleApplyCollection.
+		sub.POST("/meta/collections", env.RouteACLWrap(adminRoute, env.HandleApplyCollection))
 		sub.PATCH("/meta/collections/:name", env.RouteACLWrap(adminRoute, env.HandleUpdateCollection))
 		sub.DELETE("/meta/collections/:name", env.RouteACLWrap(adminRoute, env.HandleDeleteCollection))
 		sub.POST("/meta/collections/:name/fields", env.RouteACLWrap(adminRoute, env.HandleAddField))

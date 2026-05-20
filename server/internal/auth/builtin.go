@@ -11,16 +11,20 @@ import (
 	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/model"
 )
 
-// BuiltinAdapter is a session-based auth adapter using GoFrame sessions
-// and the kernel's own users/roles tables.
+// BuiltinAdapter is a session-based auth adapter using the kernel's own
+// sessions/users/roles tables.
 type BuiltinAdapter struct {
-	DB gdb.DB
+	DB     gdb.DB
+	Config model.SSOConfig
 }
 
 func (a *BuiltinAdapter) CurrentUser(r *ghttp.Request) (model.User, error) {
-	uid := r.Session.MustGet(model.SessionKeyUserID).Int64()
-	if uid == 0 {
-		return model.User{}, model.ErrUnauthenticated
+	uid, err := currentSessionUserID(r, a.DB, a.Config)
+	if err != nil {
+		uid = r.Session.MustGet("itab_uid").Int64()
+		if uid == 0 {
+			return model.User{}, err
+		}
 	}
 	row, err := a.DB.Model(model.BuiltinUsers).Ctx(r.Context()).
 		Where("id", uid).
@@ -28,8 +32,12 @@ func (a *BuiltinAdapter) CurrentUser(r *ghttp.Request) (model.User, error) {
 		Where("status", model.UserStatusActive).
 		One()
 	if err != nil || row.IsEmpty() {
-		_ = r.Session.Remove(model.SessionKeyUserID)
+		deleteCurrentSession(r, a.DB, a.Config)
+		_ = r.Session.Remove("itab_uid")
 		return model.User{}, model.ErrUnauthenticated
+	}
+	if r.Cookie.Get(normalizeSessionConfig(a.Config).CookieName).String() == "" {
+		_, _ = createSession(r, a.DB, a.Config, uid)
 	}
 	return model.User{
 		ID:      strconv.FormatInt(uid, 10),
@@ -57,7 +65,7 @@ func (a *BuiltinAdapter) RolesOf(u model.User) []string {
 }
 
 // HandleLocalLogin handles POST /auth/local/login.
-func HandleLocalLogin(db gdb.DB) ghttp.HandlerFunc {
+func HandleLocalLogin(db gdb.DB, cfg model.SSOConfig) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
 		var body struct {
 			Username string `json:"username"`
@@ -72,10 +80,11 @@ func HandleLocalLogin(db gdb.DB) ghttp.HandlerFunc {
 			writeErr(r, http.StatusUnauthorized, "用户名或密码错误", nil)
 			return
 		}
-		if err := r.Session.Set(model.SessionKeyUserID, u.LocalID); err != nil {
+		if _, err := createSession(r, db, cfg, u.LocalID); err != nil {
 			writeErr(r, http.StatusInternalServerError, "session error", err)
 			return
 		}
+		_ = r.Session.Set("itab_uid", u.LocalID)
 		r.Response.WriteJsonExit(g.Map{
 			"data": g.Map{"id": u.ID, "display_name": u.Name},
 		})
@@ -83,9 +92,10 @@ func HandleLocalLogin(db gdb.DB) ghttp.HandlerFunc {
 }
 
 // HandleLogout handles POST /auth/logout.
-func HandleLogout() ghttp.HandlerFunc {
+func HandleLogout(db gdb.DB, cfg model.SSOConfig) ghttp.HandlerFunc {
 	return func(r *ghttp.Request) {
-		_ = r.Session.RemoveAll()
+		deleteCurrentSession(r, db, cfg)
+		_ = r.Session.Remove("itab_uid")
 		r.Response.WriteJsonExit(g.Map{"data": "ok"})
 	}
 }

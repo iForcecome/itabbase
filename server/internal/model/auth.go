@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/gogf/gf/v2/net/ghttp"
 )
@@ -32,8 +33,10 @@ type SSOConfig struct {
 	BaseURL      string
 	Scopes       []string
 	EnableSign   bool
+	CookieName   string
 	CookieSecure bool
 	CookieDomain string
+	SessionTTL   time.Duration
 }
 
 // OAuthProvider abstracts an SSO identity provider.
@@ -55,14 +58,8 @@ type OAuthToken struct {
 // OAuthUserInfo is the normalised user profile returned by an OAuthProvider.
 type OAuthUserInfo struct {
 	ExternalID     string
-	LoginName      string
 	Name           string
 	Avatar         string
-	Email          string
-	Phone          string
-	Gender         string
-	EmployeeID     string
-	Title          string
 	Department     string
 	DepartmentPath string
 	CompanyID      string

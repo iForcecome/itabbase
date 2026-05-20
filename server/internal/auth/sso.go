@@ -67,26 +67,26 @@ func (s *SSOHandler) HandleSSOCallback(r *ghttp.Request) {
 	q := r.URL.Query()
 
 	if errParam := q.Get("error"); errParam != "" {
-		s.ssoRedirectError(r, errParam)
+		s.ssoRedirectError(r, "", errParam)
 		return
 	}
 
 	code := q.Get("code")
 	state := q.Get("state")
 	if code == "" {
-		s.ssoRedirectError(r, "missing_code")
+		s.ssoRedirectError(r, "", "missing_code")
 		return
 	}
 
 	preAuthID := r.Cookie.Get(ssoPreAuthCookie).String()
 	if preAuthID == "" {
-		s.ssoRedirectError(r, "invalid_state")
+		s.ssoRedirectError(r, "", "invalid_state")
 		return
 	}
 	store := s.getPreAuthStore()
 	returnURL, ok := store.Validate(preAuthID, state)
 	if !ok {
-		s.ssoRedirectError(r, "invalid_state")
+		s.ssoRedirectError(r, "", "invalid_state")
 		return
 	}
 
@@ -100,21 +100,21 @@ func (s *SSOHandler) HandleSSOCallback(r *ghttp.Request) {
 	token, err := s.Provider.ExchangeToken(ctx, s.Config, code)
 	if err != nil {
 		g.Log().Errorf(ctx, "[sso] exchange token failed: %v", err)
-		s.ssoRedirectError(r, "token_exchange_failed")
+		s.ssoRedirectError(r, returnURL, "token_exchange_failed")
 		return
 	}
 
 	info, err := s.Provider.FetchUser(ctx, s.Config, token)
 	if err != nil {
 		g.Log().Errorf(ctx, "[sso] fetch user info failed: %v", err)
-		s.ssoRedirectError(r, "userinfo_failed")
+		s.ssoRedirectError(r, returnURL, "userinfo_failed")
 		return
 	}
 
 	kernelUserID, status, err := s.upsertSSOUser(ctx, info)
 	if err != nil {
 		g.Log().Errorf(ctx, "[sso] upsert user failed: %v", err)
-		s.ssoRedirectError(r, "internal")
+		s.ssoRedirectError(r, returnURL, "internal")
 		return
 	}
 
@@ -148,11 +148,12 @@ func (s *SSOHandler) HandleSSOCallback(r *ghttp.Request) {
 		return
 	}
 
-	if err := r.Session.Set(model.SessionKeyUserID, kernelUserID); err != nil {
+	if _, err := createSession(r, s.DB, s.Config, kernelUserID); err != nil {
 		g.Log().Errorf(ctx, "[sso] session set failed: %v", err)
-		s.ssoRedirectError(r, "internal")
+		s.ssoRedirectError(r, returnURL, "internal")
 		return
 	}
+	_ = r.Session.Set("itab_uid", kernelUserID)
 
 	target := returnURL
 	if target == "" {
@@ -172,13 +173,7 @@ func (s *SSOHandler) upsertSSOUser(ctx context.Context, info model.OAuthUserInfo
 	now := time.Now()
 	profileData := g.Map{
 		"display_name":    info.Name,
-		"login_name":      info.LoginName,
 		"avatar":          info.Avatar,
-		"email":           info.Email,
-		"phone":           info.Phone,
-		"gender":          info.Gender,
-		"employee_id":     info.EmployeeID,
-		"title":           info.Title,
 		"department":      info.Department,
 		"department_path": info.DepartmentPath,
 		"company_id":      info.CompanyID,
@@ -239,8 +234,19 @@ func (s *SSOHandler) bindDefaultRole(ctx context.Context, userID int64) error {
 	return err
 }
 
-func (s *SSOHandler) ssoRedirectError(r *ghttp.Request, errCode string) {
-	target := ssoDefaultReturn(r) + "?error=" + url.QueryEscape(errCode)
+func (s *SSOHandler) ssoRedirectError(r *ghttp.Request, returnURL, errCode string) {
+	target := returnURL
+	if target == "" {
+		target = ssoDefaultReturn(r)
+	}
+	if u, err := url.Parse(target); err == nil {
+		q := u.Query()
+		q.Set("error", errCode)
+		u.RawQuery = q.Encode()
+		target = u.String()
+	} else {
+		target = ssoDefaultReturn(r) + "?error=" + url.QueryEscape(errCode)
+	}
 	r.Response.RedirectTo(target, http.StatusFound)
 }
 

@@ -45,11 +45,11 @@ func (e *Env) HandleOpenAPISpec(opts OpenAPIOptions) ghttp.HandlerFunc {
 // ---- internal spec types ----
 
 type oaSpec struct {
-	OpenAPI    string               `json:"openapi"`
-	Info       oaInfo               `json:"info"`
-	Paths      map[string]oaPath    `json:"paths"`
-	Components oaComponents         `json:"components"`
-	Tags       []oaTag              `json:"tags,omitempty"`
+	OpenAPI    string            `json:"openapi"`
+	Info       oaInfo            `json:"info"`
+	Paths      map[string]oaPath `json:"paths"`
+	Components oaComponents      `json:"components"`
+	Tags       []oaTag           `json:"tags,omitempty"`
 }
 
 type oaInfo struct {
@@ -88,8 +88,8 @@ type oaParam struct {
 }
 
 type oaRequestBody struct {
-	Required bool                    `json:"required"`
-	Content  map[string]oaMediaType  `json:"content"`
+	Required bool                   `json:"required"`
+	Content  map[string]oaMediaType `json:"content"`
 }
 
 type oaMediaType struct {
@@ -97,8 +97,8 @@ type oaMediaType struct {
 }
 
 type oaResponse struct {
-	Description string                  `json:"description"`
-	Content     map[string]oaMediaType  `json:"content,omitempty"`
+	Description string                 `json:"description"`
+	Content     map[string]oaMediaType `json:"content,omitempty"`
 }
 
 type oaSchema struct {
@@ -340,9 +340,9 @@ func (e *Env) buildSpec(opts OpenAPIOptions) oaSpec {
 				Summary:     fmt.Sprintf("获取单条 %s", displayName(c)),
 				OperationID: c.Name + "Get",
 				Parameters: []oaParam{
-						idParam(),
-						{Name: "include", In: "query", Schema: oaSchema{Type: "string"}, Description: "逗号分隔的关联字段名"},
-					},
+					idParam(),
+					{Name: "include", In: "query", Schema: oaSchema{Type: "string"}, Description: "逗号分隔的关联字段名"},
+				},
 				Responses: map[string]oaResponse{
 					"200": singleResponse(schemaName),
 					"404": errResp,
@@ -420,7 +420,7 @@ func (e *Env) buildSpec(opts OpenAPIOptions) oaSpec {
 		securitySchemes["cookieAuth"] = oaSecurityScheme{
 			Type: "apiKey",
 			In:   "cookie",
-			Name: "itab_session",
+			Name: model.DefaultSessionCookieName,
 		}
 	}
 

@@ -147,11 +147,10 @@ func (p *wps365Provider) fetchBasicUser(ctx context.Context, cfg model.SSOConfig
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 		Data *struct {
-			ID       string `json:"id"`
-			UserName string `json:"user_name"`
-			Avatar   string `json:"avatar"`
+			ID        string `json:"id"`
+			UserName  string `json:"user_name"`
+			Avatar    string `json:"avatar"`
 			CompanyID string `json:"company_id"`
-			ExUserID string `json:"ex_user_id"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -163,7 +162,6 @@ func (p *wps365Provider) fetchBasicUser(ctx context.Context, cfg model.SSOConfig
 
 	return model.OAuthUserInfo{
 		ExternalID: result.Data.ID,
-		LoginName:  result.Data.ExUserID,
 		Name:       result.Data.UserName,
 		Avatar:     result.Data.Avatar,
 		CompanyID:  result.Data.CompanyID,

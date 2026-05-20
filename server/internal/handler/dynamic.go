@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
@@ -466,4 +468,278 @@ func (e *Env) HandleDeleteField(r *ghttp.Request) {
 	e.Mu.Unlock()
 
 	r.Response.WriteJsonExit(g.Map{"data": CollectionMeta(c)})
+}
+
+// HandleApplyCollection upserts a collection by name (NocoBase-style apply).
+//
+// Routing semantics:
+//   - collection does not exist → delegates to HandleCreateCollection (same as plain POST)
+//   - exists, Source=dynamic   → diffs fields and patches mutable props (see below)
+//   - exists, Source=builtin/code → 422 (not user-managed)
+//
+// Field diff rules (when collection exists):
+//   - field in payload but not in DB   → ADD (writes _fields + ALTER TABLE ADD COLUMN)
+//   - field in both, only `required`/`sort` changed → updates _fields metadata
+//   - field in both, type/max_len/target/through differ → 422 (breaking; user must destroy+recreate)
+//   - field in both, `default` differs → 422 (planned: ALTER COLUMN SET DEFAULT)
+//   - field in DB but not in payload   → preserved untouched (non-destructive apply)
+//
+// Header props (display/icon/sort/title_field/owner_field) are patched into
+// the _collections metadata row when they differ from the existing values.
+func (e *Env) HandleApplyCollection(r *ghttp.Request) {
+	body, err := readJSONBody(r)
+	if err != nil {
+		writeErr(r, http.StatusBadRequest, "invalid json body", err)
+		return
+	}
+
+	name, _ := body["name"].(string)
+	if name == "" {
+		writeErr(r, http.StatusBadRequest, "name is required", nil)
+		return
+	}
+	if !model.IdentRe.MatchString(name) {
+		writeErr(r, http.StatusBadRequest,
+			fmt.Sprintf("name %q must match %s", name, model.IdentRe.String()), nil)
+		return
+	}
+
+	e.Mu.RLock()
+	existing, exists := e.FindCollection(name)
+	e.Mu.RUnlock()
+
+	if !exists {
+		// Delegate to plain create. HandleCreateCollection re-reads the body
+		// via readJSONBody, which is safe because ghttp's GetBody() is replayable.
+		e.HandleCreateCollection(r)
+		return
+	}
+	if existing.Source != model.SourceDynamic {
+		writeErr(r, http.StatusUnprocessableEntity,
+			fmt.Sprintf("cannot apply: collection %q has source %q (only dynamic collections are user-managed)",
+				name, existing.Source), nil)
+		return
+	}
+	e.applyUpdate(r, existing, body)
+}
+
+// applyUpdate is the diff-and-patch path of HandleApplyCollection.
+func (e *Env) applyUpdate(r *ghttp.Request, existing model.Collection, body map[string]any) {
+	ctx := r.Context()
+
+	// 1) Parse incoming fields (optional; absent means "header-only apply").
+	incomingFieldsRaw, _ := body["fields"].([]any)
+	var incoming []model.Field
+	if incomingFieldsRaw != nil {
+		incoming = schema.ParseFieldsFromBody(incomingFieldsRaw)
+	}
+
+	// 2) Diff fields by name.
+	existingByName := make(map[string]model.Field, len(existing.Fields))
+	for _, f := range existing.Fields {
+		existingByName[f.Name] = f
+	}
+
+	type fieldPropPatch struct {
+		Name  string
+		Patch g.Map
+	}
+	var (
+		toAdd        []model.Field
+		toUpdate     []fieldPropPatch
+		breakingErrs []string
+	)
+
+	for _, in := range incoming {
+		if !model.IdentRe.MatchString(in.Name) {
+			writeErr(r, http.StatusBadRequest,
+				fmt.Sprintf("field name %q invalid", in.Name), nil)
+			return
+		}
+		if !model.KnownType(in.Type) {
+			writeErr(r, http.StatusBadRequest,
+				fmt.Sprintf("field %q has unknown type %q", in.Name, in.Type), nil)
+			return
+		}
+		ex, found := existingByName[in.Name]
+		if !found {
+			toAdd = append(toAdd, in)
+			continue
+		}
+		// Immutable property checks (type/max_len/target/through).
+		if ex.Type != in.Type {
+			breakingErrs = append(breakingErrs,
+				fmt.Sprintf("field %q: type change %q→%q not supported; destroy and recreate",
+					in.Name, ex.Type, in.Type))
+			continue
+		}
+		if in.MaxLen != 0 && ex.MaxLen != in.MaxLen {
+			breakingErrs = append(breakingErrs,
+				fmt.Sprintf("field %q: max_len change %d→%d not supported; destroy and recreate",
+					in.Name, ex.MaxLen, in.MaxLen))
+			continue
+		}
+		if in.Target != "" && ex.Target != in.Target {
+			breakingErrs = append(breakingErrs,
+				fmt.Sprintf("field %q: relation target change %q→%q not supported",
+					in.Name, ex.Target, in.Target))
+			continue
+		}
+		if in.Through != "" && ex.Through != in.Through {
+			breakingErrs = append(breakingErrs,
+				fmt.Sprintf("field %q: relation through change %q→%q not supported",
+					in.Name, ex.Through, in.Through))
+			continue
+		}
+		if !defaultEqual(ex.Default, in.Default) {
+			breakingErrs = append(breakingErrs,
+				fmt.Sprintf("field %q: default value change is not supported in v0.1 (planned: ALTER COLUMN SET DEFAULT)",
+					in.Name))
+			continue
+		}
+		// Mutable: required only (sort comes from URL/order, not payload at this level).
+		patch := g.Map{}
+		if ex.Required != in.Required {
+			patch["required"] = in.Required
+		}
+		if len(patch) > 0 {
+			toUpdate = append(toUpdate, fieldPropPatch{Name: in.Name, Patch: patch})
+		}
+	}
+
+	if len(breakingErrs) > 0 {
+		writeErr(r, http.StatusUnprocessableEntity,
+			"breaking schema changes rejected",
+			errors.New(strings.Join(breakingErrs, "; ")))
+		return
+	}
+
+	// 3) Header diff (display/icon/sort/title_field/owner_field).
+	headerPatch := g.Map{}
+	if v, ok := body["display"].(string); ok && v != existing.Display {
+		headerPatch["display"] = v
+	}
+	if v, ok := body["icon"]; ok {
+		headerPatch["icon"] = v
+	}
+	if v, ok := body["sort"]; ok {
+		headerPatch["sort"] = v
+	}
+	if v, ok := body["title_field"].(string); ok && v != existing.TitleField {
+		headerPatch["title_field"] = v
+	}
+	if v, ok := body["owner_field"].(string); ok && v != existing.OwnerField {
+		headerPatch["owner_field"] = v
+	}
+
+	// 4) Apply header patch.
+	if len(headerPatch) > 0 {
+		if _, err := e.DB.Model(model.BuiltinMetaCollections).Ctx(ctx).
+			Where("name", existing.Name).Update(headerPatch); err != nil {
+			writeErr(r, http.StatusInternalServerError, "failed to update collection header", err)
+			return
+		}
+	}
+
+	// 5) Apply field additions (metadata + ALTER TABLE ADD COLUMN).
+	dialect := schema.Dialect(e.DB)
+	for i, f := range toAdd {
+		fm := g.Map{
+			"collection_name": existing.Name,
+			"name":            f.Name,
+			"type":            string(f.Type),
+			"required":        f.Required,
+			"max_len":         f.MaxLen,
+			"target":          f.Target,
+			"through":         f.Through,
+			"sort":            len(existing.Fields) + i,
+		}
+		if f.Default != nil {
+			if dv, err := json.Marshal(f.Default); err == nil {
+				fm["default_value"] = string(dv)
+			}
+		}
+		if _, err := e.DB.Model(model.BuiltinMetaFields).Ctx(ctx).Insert(fm); err != nil {
+			writeErr(r, http.StatusInternalServerError,
+				fmt.Sprintf("failed to save field metadata %q", f.Name), err)
+			return
+		}
+		if !f.IsVirtual() {
+			stmt := schema.BuildAddColumn(dialect, existing.DBTable(), f)
+			if _, err := e.DB.Exec(ctx, stmt); err != nil {
+				// Roll back the just-inserted metadata row.
+				e.DB.Model(model.BuiltinMetaFields).Ctx(ctx).
+					Where("collection_name", existing.Name).
+					Where("name", f.Name).
+					Delete()
+				writeErr(r, http.StatusInternalServerError,
+					fmt.Sprintf("failed to add column %q", f.Name), err)
+				return
+			}
+		}
+	}
+
+	// 6) Apply mutable-prop updates.
+	for _, upd := range toUpdate {
+		if _, err := e.DB.Model(model.BuiltinMetaFields).Ctx(ctx).
+			Where("collection_name", existing.Name).
+			Where("name", upd.Name).
+			Update(upd.Patch); err != nil {
+			writeErr(r, http.StatusInternalServerError,
+				fmt.Sprintf("failed to update field %q", upd.Name), err)
+			return
+		}
+	}
+
+	// 7) Sync in-memory state.
+	e.Mu.Lock()
+	for i := range *e.Collections {
+		if (*e.Collections)[i].Name != existing.Name {
+			continue
+		}
+		cur := &(*e.Collections)[i]
+		if v, ok := headerPatch["display"].(string); ok {
+			cur.Display = v
+		}
+		if v, ok := headerPatch["title_field"].(string); ok {
+			cur.TitleField = v
+		}
+		if v, ok := headerPatch["owner_field"].(string); ok {
+			cur.OwnerField = v
+		}
+		cur.Fields = append(cur.Fields, toAdd...)
+		for _, upd := range toUpdate {
+			for j := range cur.Fields {
+				if cur.Fields[j].Name == upd.Name {
+					if v, ok := upd.Patch["required"].(bool); ok {
+						cur.Fields[j].Required = v
+					}
+					break
+				}
+			}
+		}
+		existing = *cur
+		break
+	}
+	e.Mu.Unlock()
+
+	r.Response.Status = http.StatusOK
+	r.Response.WriteJsonExit(g.Map{
+		"data":    CollectionMeta(existing),
+		"applied": g.Map{"added": len(toAdd), "updated": len(toUpdate), "header": len(headerPatch) > 0},
+	})
+}
+
+// defaultEqual compares two arbitrary default values from field metadata.
+// Both can be nil, scalars (string/int/bool/float), or parsed JSON values.
+// Comparison uses fmt.Sprintf("%v") which is enough for the value shapes
+// itabbase currently stores (no nested maps/slices in defaults).
+func defaultEqual(a, b any) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }

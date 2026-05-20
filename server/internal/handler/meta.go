@@ -20,17 +20,12 @@ func (e *Env) HandleWhoami(r *ghttp.Request) {
 				Where("id", u.LocalID).One()
 			if err == nil && !row.IsEmpty() {
 				directFields := []string{
-					"external_id", "avatar", "email", "phone",
-					"gender", "employee_id", "title", "department",
-					"department_path", "company_id",
+					"avatar", "department", "department_path", "company_id",
 				}
 				for _, f := range directFields {
 					if v := row[f].String(); v != "" {
 						data[f] = v
 					}
-				}
-				if v := row["login_name"].String(); v != "" {
-					data["user_name"] = v
 				}
 			}
 		}

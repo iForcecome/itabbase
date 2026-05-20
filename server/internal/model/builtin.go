@@ -3,6 +3,7 @@ package model
 // Builtin collection names.
 const (
 	BuiltinUsers           = "users"
+	BuiltinSessions        = "sessions"
 	BuiltinRoles           = "roles"
 	BuiltinUserRoles       = "user_roles"
 	BuiltinSettings        = "system_settings"
@@ -21,4 +22,4 @@ const (
 	UserStatusRejected = "rejected"
 )
 
-const SessionKeyUserID = "itab_uid"
+const DefaultSessionCookieName = "itab_session_id"
