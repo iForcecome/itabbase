@@ -14,6 +14,8 @@ import (
 	"ksogit.kingsoft.net/wpsee/itabbase/server/internal/provider/wps365"
 )
 
+const Version = "0.1.0"
+
 // --- Type aliases (public API unchanged) ---
 
 type Collection = model.Collection
