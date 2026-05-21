@@ -12,6 +12,7 @@ import (
 )
 
 const defaultSessionTTL = 24 * time.Hour
+const timeLayout = "2006-01-02 15:04:05"
 
 func normalizeSessionConfig(cfg model.SSOConfig) model.SSOConfig {
 	if cfg.CookieName == "" {
@@ -33,13 +34,15 @@ func SSOConfigDefaults(cfg model.SSOConfig) model.SSOConfig {
 func createSession(r *ghttp.Request, db gdb.DB, cfg model.SSOConfig, userID int64) (string, error) {
 	cfg = normalizeSessionConfig(cfg)
 	now := time.Now()
+	nowStr := now.Format(timeLayout)
+	expiresStr := now.Add(cfg.SessionTTL).Format(timeLayout)
 	sid := randomHex(32)
 	_, err := db.Model(model.BuiltinSessions).Ctx(r.Context()).Insert(g.Map{
 		"sid":        sid,
 		"user_id":    userID,
-		"expires_at": now.Add(cfg.SessionTTL),
-		"created_at": now,
-		"updated_at": now,
+		"expires_at": expiresStr,
+		"created_at": nowStr,
+		"updated_at": nowStr,
 	})
 	if err != nil {
 		return "", err
@@ -56,7 +59,7 @@ func currentSessionUserID(r *ghttp.Request, db gdb.DB, cfg model.SSOConfig) (int
 	}
 	row, err := db.Model(model.BuiltinSessions).Ctx(r.Context()).
 		Where("sid", sid).
-		Where("expires_at > ?", time.Now()).
+		Where("expires_at > ?", time.Now().Format(timeLayout)).
 		One()
 	if err != nil || row.IsEmpty() {
 		clearSessionCookie(r, cfg)
@@ -64,7 +67,7 @@ func currentSessionUserID(r *ghttp.Request, db gdb.DB, cfg model.SSOConfig) (int
 	}
 	_, _ = db.Model(model.BuiltinSessions).Ctx(r.Context()).
 		Where("sid", sid).
-		Update(g.Map{"updated_at": time.Now()})
+		Update(g.Map{"updated_at": time.Now().Format(timeLayout)})
 	return row["user_id"].Int64(), nil
 }
 
