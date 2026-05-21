@@ -47,11 +47,12 @@ func (s *SSOHandler) HandleSSOLogin(r *ghttp.Request) {
 	store := s.getPreAuthStore()
 	id, state := store.Create(returnURL)
 
+	cfg := normalizeSessionConfig(s.Config)
 	http.SetCookie(r.Response.Writer, &http.Cookie{
 		Name:     ssoPreAuthCookie,
 		Value:    id,
-		Path:     "/",
-		Domain:   s.Config.CookieDomain,
+		Path:     cfg.CookiePath,
+		Domain:   cfg.CookieDomain,
 		HttpOnly: true,
 		Secure:   s.Config.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -90,9 +91,10 @@ func (s *SSOHandler) HandleSSOCallback(r *ghttp.Request) {
 		return
 	}
 
+	clearCfg := normalizeSessionConfig(s.Config)
 	http.SetCookie(r.Response.Writer, &http.Cookie{
-		Name: ssoPreAuthCookie, Value: "", Path: "/",
-		Domain: s.Config.CookieDomain, HttpOnly: true, MaxAge: -1,
+		Name: ssoPreAuthCookie, Value: "", Path: clearCfg.CookiePath,
+		Domain: clearCfg.CookieDomain, HttpOnly: true, MaxAge: -1,
 	})
 
 	ctx := r.Context()
@@ -341,10 +343,21 @@ func isValidReturnURL(r *ghttp.Request, raw string) bool {
 	return u.Hostname() == reqHost
 }
 
+func requestPathPrefix(path string) string {
+	const marker = "/api/"
+	if i := strings.Index(path, marker); i > 0 {
+		return path[:i]
+	}
+	return ""
+}
+
 func ssoDefaultReturn(r *ghttp.Request) string {
 	scheme := "http"
 	if r.Request.TLS != nil || strings.EqualFold(r.GetHeader("X-Forwarded-Proto"), "https") {
 		scheme = "https"
+	}
+	if prefix := requestPathPrefix(r.URL.Path); prefix != "" {
+		return scheme + "://" + r.Host + prefix + "/"
 	}
 	return scheme + "://" + r.Host + "/"
 }

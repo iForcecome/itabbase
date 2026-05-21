@@ -17,6 +17,9 @@ func normalizeSessionConfig(cfg model.SSOConfig) model.SSOConfig {
 	if cfg.CookieName == "" {
 		cfg.CookieName = model.DefaultSessionCookieName
 	}
+	if cfg.CookiePath == "" {
+		cfg.CookiePath = "/"
+	}
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = defaultSessionTTL
 	}
@@ -79,7 +82,7 @@ func setSessionCookie(r *ghttp.Request, cfg model.SSOConfig, sid string) {
 	http.SetCookie(r.Response.Writer, &http.Cookie{
 		Name:     cfg.CookieName,
 		Value:    sid,
-		Path:     "/",
+		Path:     cfg.CookiePath,
 		Domain:   cfg.CookieDomain,
 		HttpOnly: true,
 		Secure:   cfg.CookieSecure,
@@ -93,7 +96,7 @@ func clearSessionCookie(r *ghttp.Request, cfg model.SSOConfig) {
 	http.SetCookie(r.Response.Writer, &http.Cookie{
 		Name:     cfg.CookieName,
 		Value:    "",
-		Path:     "/",
+		Path:     cfg.CookiePath,
 		Domain:   cfg.CookieDomain,
 		HttpOnly: true,
 		Secure:   cfg.CookieSecure,

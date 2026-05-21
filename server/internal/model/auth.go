@@ -36,6 +36,7 @@ type SSOConfig struct {
 	CookieName   string
 	CookieSecure bool
 	CookieDomain string
+	CookiePath   string // 默认 "/"；子路径部署时设为 pathPrefix，如 "/itabbase"
 	SessionTTL   time.Duration
 }
 
